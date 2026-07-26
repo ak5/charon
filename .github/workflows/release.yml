@@ -66,6 +66,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          provenance: mode=max
+          sbom: true
           tags: ${{ needs.authorize.outputs.image }}:sha-${{ needs.authorize.outputs.revision }}
           labels: org.opencontainers.image.revision=${{ needs.authorize.outputs.revision }}
           cache-from: type=gha

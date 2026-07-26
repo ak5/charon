@@ -1,6 +1,6 @@
 //! Charon-owned certificate authority for per-host CONNECT interception.
 
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use rcgen::{CertificateParams, Issuer, KeyPair};
@@ -10,7 +10,7 @@ use rustls::{
 };
 use secrecy::{ExposeSecret as _, SecretString};
 
-use crate::config::TlsConfig;
+use crate::{config::TlsConfig, provider::ensure_private_file};
 
 /// CA signer that intentionally has no `Debug`, serialization, or response
 /// conversion implementation.
@@ -27,7 +27,7 @@ impl TlsAuthority {
     ///
     /// Returns an error for missing, over-permissive, or malformed CA material.
     pub fn load(config: &TlsConfig) -> Result<Self> {
-        ensure_private_permissions(&config.ca_private_key)?;
+        ensure_private_file(&config.ca_private_key, "TLS CA private key")?;
         let certificate_pem = std::fs::read_to_string(&config.ca_certificate)
             .context("failed to read TLS CA certificate")?;
         let private_pem = SecretString::from(
@@ -80,26 +80,4 @@ impl TlsAuthority {
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         Ok(Arc::new(config))
     }
-}
-
-#[cfg(unix)]
-fn ensure_private_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let mode = std::fs::metadata(path)
-        .context("failed to inspect TLS CA private key")?
-        .permissions()
-        .mode();
-    if mode & 0o077 != 0 {
-        bail!("TLS CA private key must not be accessible by group or other");
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_private_permissions(path: &Path) -> Result<()> {
-    if !path.is_file() {
-        bail!("TLS CA private key is unavailable");
-    }
-    Ok(())
 }

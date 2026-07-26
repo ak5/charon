@@ -9,6 +9,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
+
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use axum::{
@@ -137,12 +140,15 @@ async fn replaces_placeholder_without_exposing_secret_to_client_config() -> Resu
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "mock-token".into(),
+            secret_ref: "CHARON_MOCK_TOKEN".into(),
         }],
     };
     // Tests use an IP destination; production configuration intentionally
     // rejects hosts containing ports, while URI matching receives host only.
-    let secrets = StaticProvider(HashMap::from([("mock-token".into(), "real-secret".into())]));
+    let secrets = StaticProvider(HashMap::from([(
+        "CHARON_MOCK_TOKEN".into(),
+        "real-secret".into(),
+    )]));
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -194,6 +200,12 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let password_file = directory.path().join("egress-password");
     std::fs::write(&password_file, "synthetic-password")?;
+    #[cfg(unix)]
+    {
+        let mut permissions = std::fs::metadata(&password_file)?.permissions();
+        permissions.set_mode(0o600);
+        std::fs::set_permissions(&password_file, permissions)?;
+    }
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_address = proxy_listener.local_addr()?;
     let config = Config {
@@ -216,14 +228,17 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
         }],
         services: vec![ServicePolicy {
             name: "upstream".into(),
-            hosts: vec!["allowed.invalid".into()],
+            hosts: vec!["127.0.0.1".into()],
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "token".into(),
+            secret_ref: "CHARON_TOKEN".into(),
         }],
     };
-    let secrets = StaticProvider(HashMap::from([("token".into(), "synthetic-token".into())]));
+    let secrets = StaticProvider(HashMap::from([(
+        "CHARON_TOKEN".into(),
+        "synthetic-token".into(),
+    )]));
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -231,7 +246,7 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
         .proxy(reqwest::Proxy::http(format!("http://{proxy_address}"))?)
         .build()?;
     let response = client
-        .get("http://allowed.invalid/resource")
+        .get("http://127.0.0.1/resource")
         .header(
             "proxy-authorization",
             format!("Charon {}", token("proxied-read", "nonce-proxied-1234")?),
@@ -268,10 +283,10 @@ async fn denies_unlisted_destinations() -> Result<()> {
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "token".into(),
+            secret_ref: "CHARON_TOKEN".into(),
         }],
     };
-    let secrets = StaticProvider(HashMap::from([("token".into(), "secret".into())]));
+    let secrets = StaticProvider(HashMap::from([("CHARON_TOKEN".into(), "secret".into())]));
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -279,7 +294,7 @@ async fn denies_unlisted_destinations() -> Result<()> {
         .proxy(reqwest::Proxy::http(format!("http://{proxy_address}"))?)
         .build()?;
     let response = client
-        .get("http://denied.invalid/resource")
+        .get("http://127.0.0.2/resource")
         .header("authorization", "Bearer charon-placeholder")
         .send()
         .await?;
@@ -326,7 +341,7 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "mock-token".into(),
+            secret_ref: "CHARON_MOCK_TOKEN".into(),
         }],
     };
     let calls = Arc::new(AtomicUsize::new(0));
@@ -374,7 +389,7 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "mock-token".into(),
+            secret_ref: "CHARON_MOCK_TOKEN".into(),
         }],
     };
     let calls = Arc::new(AtomicUsize::new(0));
@@ -443,11 +458,11 @@ async fn never_follows_upstream_redirects_with_an_injected_credential() -> Resul
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "redirect-token".into(),
+            secret_ref: "CHARON_REDIRECT_TOKEN".into(),
         }],
     };
     let secrets = StaticProvider(HashMap::from([(
-        "redirect-token".into(),
+        "CHARON_REDIRECT_TOKEN".into(),
         "fixture-secret".into(),
     )]));
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
@@ -533,11 +548,11 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "stream-token".into(),
+            secret_ref: "CHARON_STREAM_TOKEN".into(),
         }],
     };
     let secrets = StaticProvider(HashMap::from([(
-        "stream-token".into(),
+        "CHARON_STREAM_TOKEN".into(),
         "fixture-secret".into(),
     )]));
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);

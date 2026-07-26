@@ -22,15 +22,13 @@ CHARON_BIND_IP=<approved-internal-listener-ip>
 CHARON_TEST_CREDENTIAL=<disposable-value-with-no-production-access>
 ```
 
-The operator provisions a rootless Docker daemon for the deploy account, ownership of
-only `/opt/apps/charon`, and `curl`. CI connects to a private-network OpenSSH
-listener on TCP/2222. The trusted deploy job has job-scoped `packages: read`
-permission and streams its short-lived `GITHUB_TOKEN` to `docker login` over SSH
-stdin. The deploy script uses an isolated temporary Docker config for the pull
-and removes it on every exit path. The token is never a command-line argument,
-Compose value, permanent host login, or pull-request credential. The deploy
-account has neither sudo nor access to the rootful Docker socket shared by the
-secrets stack.
+The operator provisions a rootless Docker daemon for the deploy account,
+ownership of only `/opt/apps/charon`, and `curl`. If registry authentication is
+required, the trusted deployment system streams a short-lived package-read
+token to `docker login` through the script's isolated temporary Docker config.
+The token is never a command-line argument, Compose value, or permanent host
+login. The deploy account has neither sudo nor access to a rootful Docker
+socket shared by the secrets stack.
 
 ## Verification and failure behavior
 
@@ -48,12 +46,9 @@ docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revis
 
 ## Rollback
 
-Use **Actions → Release → Run workflow**, enter a previously published full
-40-character main commit SHA, and run it. The workflow does not rebuild or
-retag; it pulls that existing immutable image and runs the same verification.
-An operator may invoke the host script directly only after supplying equivalent
-temporary GHCR authentication through an isolated `DOCKER_CONFIG`; the trusted
-workflow is the supported rollback path. The underlying command is:
+Select a previously published full 40-character main commit SHA in the trusted
+deployment system. It must pull the existing immutable image rather than
+rebuild or retag it. The project-owned host command is:
 
 ```sh
 /opt/apps/charon/redeploy.sh \

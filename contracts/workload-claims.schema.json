@@ -20,26 +20,37 @@
     "exp"
   ],
   "properties": {
-    "iss": { "$ref": "#/$defs/identifier" },
-    "aud": { "$ref": "#/$defs/identifier" },
-    "sub": { "$ref": "#/$defs/identifier" },
-    "tenant": { "$ref": "#/$defs/identifier" },
-    "persona": { "$ref": "#/$defs/identifier" },
-    "workspace": { "$ref": "#/$defs/identifier" },
-    "lease": { "$ref": "#/$defs/identifier" },
-    "operation": { "$ref": "#/$defs/identifier" },
-    "capability": { "$ref": "#/$defs/identifier" },
-    "jti": { "type": "string", "minLength": 16 },
+    "iss": { "$ref": "#/$defs/issuerValue" },
+    "aud": { "$ref": "#/$defs/issuerValue" },
+    "sub": { "$ref": "#/$defs/auditIdentifier" },
+    "tenant": { "$ref": "#/$defs/auditIdentifier" },
+    "persona": { "$ref": "#/$defs/auditIdentifier" },
+    "workspace": { "$ref": "#/$defs/auditIdentifier" },
+    "lease": { "$ref": "#/$defs/auditIdentifier" },
+    "operation": { "$ref": "#/$defs/auditIdentifier" },
+    "capability": { "$ref": "#/$defs/auditIdentifier" },
+    "jti": { "$ref": "#/$defs/nonce" },
     "iat": { "type": "integer", "minimum": 0 },
     "nbf": { "type": "integer", "minimum": 0 },
     "exp": { "type": "integer", "minimum": 1 }
   },
   "$defs": {
-    "identifier": {
+    "issuerValue": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 128
+      "maxLength": 256
+    },
+    "auditIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
     }
   }
 }
-

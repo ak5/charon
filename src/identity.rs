@@ -16,6 +16,8 @@ use crate::config::{CapabilityPolicy, Config};
 
 /// Header carrying the signed workload manifest.
 pub const IDENTITY_HEADER: &str = "proxy-authorization";
+const MAX_TOKEN_BYTES: usize = 8 * 1024;
+const MAX_CLAIMS_BYTES: usize = 4 * 1024;
 
 /// Claims signed by the workload-identity issuer.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -139,10 +141,12 @@ impl IdentityVerifier {
             claims.workspace.as_str(),
             claims.lease.as_str(),
             claims.operation.as_str(),
+            claims.capability.as_str(),
         ]
         .iter()
-        .any(|value| value.is_empty() || value.len() > 128)
+        .any(|value| !is_audit_identifier(value))
             || claims.jti.len() < 16
+            || !is_audit_identifier(&claims.jti)
         {
             bail!("workload identity fields are invalid");
         }
@@ -179,6 +183,9 @@ impl IdentityVerifier {
     }
 
     fn verify(&self, token: &str) -> Result<WorkloadClaims> {
+        if token.len() > MAX_TOKEN_BYTES {
+            bail!("workload identity is too large");
+        }
         let (payload, signature) = token
             .split_once('.')
             .context("workload identity is malformed")?;
@@ -188,6 +195,9 @@ impl IdentityVerifier {
         let payload_bytes = URL_SAFE_NO_PAD
             .decode(payload)
             .context("workload identity payload is malformed")?;
+        if payload_bytes.len() > MAX_CLAIMS_BYTES {
+            bail!("workload identity claims are too large");
+        }
         let signature_bytes = URL_SAFE_NO_PAD
             .decode(signature)
             .context("workload identity signature is malformed")?;
@@ -210,6 +220,14 @@ impl IdentityVerifier {
         }
         Ok(())
     }
+}
+
+fn is_audit_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
 fn authorize_operation(
@@ -404,5 +422,23 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_oversized_or_log_unsafe_identity_fields() {
+        let config = config();
+        let verifier = IdentityVerifier::new(&config).unwrap_or_else(|error| panic!("{error}"));
+        let mut oversized = claims();
+        oversized.sub = "a".repeat(129);
+        assert!(authorize(&verifier, &sign(&oversized), &config).is_err());
+
+        let verifier = IdentityVerifier::new(&config).unwrap_or_else(|error| panic!("{error}"));
+        let mut unsafe_operation = claims();
+        unsafe_operation.operation = "line\nbreak".into();
+        unsafe_operation.jti = "nonce-log-safe-1234".into();
+        assert!(authorize(&verifier, &sign(&unsafe_operation), &config).is_err());
+
+        let verifier = IdentityVerifier::new(&config).unwrap_or_else(|error| panic!("{error}"));
+        assert!(authorize(&verifier, &format!("{}.", "a".repeat(8 * 1024)), &config).is_err());
     }
 }
