@@ -17,6 +17,42 @@ use crate::config::{ProviderConfig, VaultwardenConfig};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Provider-neutral failures safe to cross the secret-store adapter boundary.
+///
+/// Variants deliberately carry no backend error, account, item, reference, or
+/// secret material. Adapters may log only approved aggregate metadata before
+/// converting backend failures into one of these values.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderError {
+    /// The provider requires an operator unlock or session refresh.
+    Locked,
+    /// The provider, its client, or its cache cannot currently serve requests.
+    Unavailable,
+    /// Trusted policy names no secret in this provider instance.
+    ReferenceNotMapped,
+    /// The mapped secret is missing, revoked, empty, or otherwise unusable.
+    SecretUnavailable,
+    /// The backend returned a response that violates its adapter contract.
+    InvalidResponse,
+}
+
+impl std::fmt::Display for ProviderError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Locked => "secret provider is locked",
+            Self::Unavailable => "secret provider is unavailable",
+            Self::ReferenceNotMapped => "secret reference is not mapped",
+            Self::SecretUnavailable => "secret is unavailable",
+            Self::InvalidResponse => "secret provider returned an invalid response",
+        })
+    }
+}
+
+impl std::error::Error for ProviderError {}
+
+/// Result type enforced for all secret-store operations.
+pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
+
 /// An opaque, policy-selected provider reference.
 ///
 /// It is not secret material, but provider errors and audit events must not
@@ -45,12 +81,12 @@ impl<'a> SecretRef<'a> {
 #[async_trait]
 pub trait SecretProvider: Send + Sync {
     /// Check provider readiness without resolving a credential.
-    async fn health(&self) -> Result<()> {
+    async fn health(&self) -> ProviderResult<()> {
         Ok(())
     }
 
     /// Resolve one secret. Implementations must never log the result.
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> Result<SecretString>;
+    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString>;
 }
 
 /// Construct the configured, compile-time registered provider adapter.
@@ -77,10 +113,10 @@ pub struct EnvironmentProvider;
 
 #[async_trait]
 impl SecretProvider for EnvironmentProvider {
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> Result<SecretString> {
+    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
         std::env::var(secret_ref.as_str())
             .map(SecretString::from)
-            .map_err(|_| anyhow::anyhow!("environment provider value is unavailable"))
+            .map_err(|_| ProviderError::SecretUnavailable)
     }
 }
 
@@ -129,27 +165,28 @@ impl VaultwardenProvider {
         })
     }
 
-    fn cached(&self, secret_ref: &str) -> Result<Option<SecretString>> {
-        let mut cache = self
-            .cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("Vaultwarden cache is unavailable"))?;
+    fn cached(&self, secret_ref: &str) -> ProviderResult<Option<SecretString>> {
+        let mut cache = self.cache.lock().map_err(|_| ProviderError::Unavailable)?;
         cache.retain(|_, entry| entry.expires_at > Instant::now());
         Ok(cache.get(secret_ref).map(|entry| entry.value.clone()))
     }
 
-    fn session(&self) -> Result<SecretString> {
+    fn session(&self) -> ProviderResult<SecretString> {
         ensure_private_file(&self.config.session_file, "Vaultwarden session")
-            .map_err(|_| anyhow::anyhow!("Vaultwarden provider is locked"))?;
+            .map_err(|_| ProviderError::Locked)?;
         let session = std::fs::read_to_string(&self.config.session_file)
-            .map_err(|_| anyhow::anyhow!("Vaultwarden provider is locked"))?;
+            .map_err(|_| ProviderError::Locked)?;
         if session.is_empty() || session.chars().any(char::is_whitespace) {
-            bail!("Vaultwarden provider is locked");
+            return Err(ProviderError::Locked);
         }
         Ok(SecretString::from(session))
     }
 
-    async fn command(&self, session: &SecretString, args: &[&str]) -> Result<std::process::Output> {
+    async fn command(
+        &self,
+        session: &SecretString,
+        args: &[&str],
+    ) -> ProviderResult<std::process::Output> {
         let mut command = Command::new(&self.config.cli_path);
         command
             .args(args)
@@ -160,16 +197,16 @@ impl VaultwardenProvider {
             .kill_on_drop(true);
         timeout(COMMAND_TIMEOUT, command.output())
             .await
-            .map_err(|_| anyhow::anyhow!("Vaultwarden provider is unavailable"))?
-            .map_err(|_| anyhow::anyhow!("Vaultwarden provider is unavailable"))
+            .map_err(|_| ProviderError::Unavailable)?
+            .map_err(|_| ProviderError::Unavailable)
     }
 
-    async fn ensure_unlocked(&self, session: &SecretString) -> Result<()> {
+    async fn ensure_unlocked(&self, session: &SecretString) -> ProviderResult<()> {
         let mut output = self.command(session, &["status"]).await?;
         if !output.status.success() {
             output.stdout.zeroize();
             output.stderr.zeroize();
-            bail!("Vaultwarden provider is unavailable");
+            return Err(ProviderError::Unavailable);
         }
         let status: VaultStatus = match serde_json::from_slice(&output.stdout) {
             Ok(status) => status,
@@ -185,41 +222,45 @@ impl VaultwardenProvider {
                 );
                 output.stdout.zeroize();
                 output.stderr.zeroize();
-                bail!("Vaultwarden provider returned an invalid status");
+                return Err(ProviderError::InvalidResponse);
             }
         };
         output.stdout.zeroize();
         output.stderr.zeroize();
         if status.status != "unlocked" {
-            bail!("Vaultwarden provider is locked");
+            return Err(ProviderError::Locked);
         }
         Ok(())
     }
 
-    async fn refresh(&self, session: &SecretString) -> Result<()> {
+    async fn refresh(&self, session: &SecretString) -> ProviderResult<()> {
         let mut output = self.command(session, &["sync"]).await?;
         let success = output.status.success();
         output.stdout.zeroize();
         output.stderr.zeroize();
         if !success {
-            bail!("Vaultwarden provider is unavailable");
+            return Err(ProviderError::Unavailable);
         }
         Ok(())
     }
 
-    async fn item_password(&self, session: &SecretString, item_id: &str) -> Result<SecretString> {
+    async fn item_password(
+        &self,
+        session: &SecretString,
+        item_id: &str,
+    ) -> ProviderResult<SecretString> {
         let mut output = self.command(session, &["get", "password", item_id]).await?;
         output.stderr.zeroize();
         if !output.status.success() {
             output.stdout.zeroize();
-            bail!("Vaultwarden item is unavailable");
+            return Err(ProviderError::SecretUnavailable);
         }
         let mut value = match String::from_utf8(std::mem::take(&mut output.stdout)) {
             Ok(value) => value,
             Err(error) => {
                 let mut bytes = error.into_bytes();
                 bytes.zeroize();
-                bail!("Vaultwarden item is invalid");
+                return Err(ProviderError::InvalidResponse);
             }
         };
         while value.ends_with(['\n', '\r']) {
@@ -227,7 +268,7 @@ impl VaultwardenProvider {
         }
         if value.is_empty() {
             value.zeroize();
-            bail!("Vaultwarden item is unavailable");
+            return Err(ProviderError::SecretUnavailable);
         }
         Ok(SecretString::from(value))
     }
@@ -300,17 +341,17 @@ struct VaultStatus {
 
 #[async_trait]
 impl SecretProvider for VaultwardenProvider {
-    async fn health(&self) -> Result<()> {
+    async fn health(&self) -> ProviderResult<()> {
         let session = self.session()?;
         self.ensure_unlocked(&session).await
     }
 
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> Result<SecretString> {
+    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
         let secret_ref = secret_ref.as_str();
         let item_id = self
             .items
             .get(secret_ref)
-            .context("credential reference is not mapped")?;
+            .ok_or(ProviderError::ReferenceNotMapped)?;
         if let Some(value) = self.cached(secret_ref)? {
             return Ok(value);
         }
@@ -320,7 +361,7 @@ impl SecretProvider for VaultwardenProvider {
         let value = self.item_password(&session, item_id).await?;
         self.cache
             .lock()
-            .map_err(|_| anyhow::anyhow!("Vaultwarden cache is unavailable"))?
+            .map_err(|_| ProviderError::Unavailable)?
             .insert(
                 secret_ref.to_owned(),
                 CachedSecret {
@@ -329,5 +370,33 @@ impl SecretProvider for VaultwardenProvider {
                 },
             );
         Ok(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProviderError;
+
+    #[test]
+    fn provider_failures_are_closed_and_data_free() {
+        let failures = [
+            (ProviderError::Locked, "secret provider is locked"),
+            (ProviderError::Unavailable, "secret provider is unavailable"),
+            (
+                ProviderError::ReferenceNotMapped,
+                "secret reference is not mapped",
+            ),
+            (ProviderError::SecretUnavailable, "secret is unavailable"),
+            (
+                ProviderError::InvalidResponse,
+                "secret provider returned an invalid response",
+            ),
+        ];
+
+        for (failure, expected) in failures {
+            assert_eq!(failure.to_string(), expected);
+            assert!(!failure.to_string().contains('/'));
+            assert!(!failure.to_string().contains(':'));
+        }
     }
 }

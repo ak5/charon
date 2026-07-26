@@ -3,6 +3,9 @@
 - `openapi.yaml` describes Charon's origin-style liveness and readiness
   endpoints. It deliberately does not pretend that forward-proxy or `CONNECT`
   traffic is a REST API.
+- `forward-proxy.md` is the normative public protocol contract for HTTP
+  absolute-form requests, `CONNECT`, signed manifests, authorization ordering,
+  and fail-closed responses.
 - `workload-claims.schema.json` validates the JSON payload signed by a workload
   identity issuer. The compact wire form remains
   `base64url(payload).base64url(ed25519_signature)`.

@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use async_trait::async_trait;
 use axum::{Router, http::HeaderMap, routing::any};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -17,7 +17,7 @@ use charon::{
         CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ServicePolicy,
     },
     identity::WorkloadClaims,
-    provider::{SecretProvider, SecretRef},
+    provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
     proxy::{AppState, app},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -45,16 +45,16 @@ impl DisposableProvider {
 
 #[async_trait]
 impl SecretProvider for DisposableProvider {
-    async fn health(&self) -> Result<()> {
+    async fn health(&self) -> ProviderResult<()> {
         if self.unavailable.load(Ordering::SeqCst) {
-            bail!("disposable realm provider is unavailable");
+            return Err(ProviderError::Unavailable);
         }
         Ok(())
     }
 
-    async fn resolve(&self, _secret_ref: &SecretRef<'_>) -> Result<SecretString> {
+    async fn resolve(&self, _secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
         if self.unavailable.load(Ordering::SeqCst) {
-            bail!("disposable realm provider is unavailable");
+            return Err(ProviderError::Unavailable);
         }
         Ok(self.value.clone())
     }

@@ -77,6 +77,26 @@ fn openapi_covers_only_the_runtime_probe_surface() -> Result<()> {
 }
 
 #[test]
+fn forward_proxy_contract_maps_the_non_rest_data_plane() -> Result<()> {
+    let contract = fs::read_to_string("contracts/forward-proxy.md")?;
+    for required in [
+        "Version: 1",
+        "Proxy-Authorization: Charon",
+        "workload-claims.schema.json",
+        "## Authorization order",
+        "Only then may Charon pass",
+        "## Credential rendering",
+        "## Responses",
+        "no request-path callback",
+    ] {
+        if !contract.contains(required) {
+            bail!("forward-proxy contract is missing {required:?}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn public_sources_are_orchestrator_neutral() -> Result<()> {
     for root in [
         ".github",
