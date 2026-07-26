@@ -9,7 +9,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Result, bail};
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use charon::{
@@ -18,7 +18,7 @@ use charon::{
         TlsConfig,
     },
     identity::WorkloadClaims,
-    provider::{SecretProvider, SecretRef},
+    provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
     proxy::{AppState, app},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -43,12 +43,12 @@ struct StaticProvider(HashMap<String, String>);
 
 #[async_trait]
 impl SecretProvider for StaticProvider {
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> Result<SecretString> {
+    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
         self.0
             .get(secret_ref.as_str())
             .cloned()
             .map(SecretString::from)
-            .context("missing fixture secret")
+            .ok_or(ProviderError::SecretUnavailable)
     }
 }
 

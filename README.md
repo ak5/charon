@@ -100,8 +100,10 @@ in [`integration/vertical/README.md`](integration/vertical/README.md).
 
 The integration boundaries are indexed in
 [`docs/integration-boundaries.md`](docs/integration-boundaries.md).
-Machine-readable contracts live in [`contracts/`](contracts/). The production
-persona-realm boundary and external reconciler contract are in
+Machine-readable schemas and the normative
+[`forward-proxy protocol`](contracts/forward-proxy.md) live in
+[`contracts/`](contracts/). The production persona-realm boundary and external
+reconciler contract are in
 [`ADR 0003`](docs/adr/0003-persona-realms.md) and
 [`docs/persona-realm-contract.md`](docs/persona-realm-contract.md).
 The secret-store extension contract and its fail-closed constraints are in

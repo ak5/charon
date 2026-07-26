@@ -15,7 +15,7 @@ Charon uses the `SecretProvider` Rust trait as its adapter boundary. An adapter:
 - receives a typed opaque `SecretRef` borrowed from validated local policy;
 - exposes a credential-free readiness check;
 - returns only `secrecy::SecretString`;
-- reports coarse, reference-free errors;
+- reports only the closed, provider-neutral `ProviderError` taxonomy;
 - owns any backend client, authentication session, and bounded cache; and
 - never derives backend routing from workload requests or signed manifests.
 
@@ -28,6 +28,18 @@ Adding another backend requires:
 3. an adapter implementation and construction branch;
 4. locked, unavailable, missing, rotation, cache, and leakage tests; and
 5. threat-model and operator-documentation updates.
+
+The closed failure taxonomy is `Locked`, `Unavailable`,
+`ReferenceNotMapped`, `SecretUnavailable`, and `InvalidResponse`. Variants
+carry no backend error, account, item, reference, or secret material. Backend
+SDK and protocol errors must be reduced to one of these values inside the
+adapter.
+
+Every production adapter must run the same behavioral contract: credential-free
+health, successful resolution of a policy-owned mapping, fail-closed rejection
+of an unmapped reference, secret-holding return types, and provider-neutral
+errors. Backend-specific suites additionally cover lock, outage, deletion,
+rotation, bounded caching, protected runtime material, and leakage.
 
 One isolated realm owns one provider instance. This keeps accounts, sessions,
 caches, readiness, and failure domains aligned with the persona boundary.
@@ -63,4 +75,3 @@ That extension requires a follow-up ADR proving:
   linked.
 - **Automatic provider fallback:** makes outages capable of changing credential
   identity and violates fail-closed routing.
-

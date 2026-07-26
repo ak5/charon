@@ -113,6 +113,11 @@ capability without placing the underlying credential in that workload.
 24. Public container builds pin both Docker stages by manifest digest and emit
     provenance and SBOM attestations. Dependabot covers Rust, GitHub Actions,
     and Docker dependencies.
+25. Secret-store adapters return only `SecretString` values and the closed,
+    data-free `ProviderError` taxonomy. Raw backend errors, account identifiers,
+    item identifiers, policy references, and response bodies cannot cross the
+    adapter boundary. Each realm selects exactly one adapter instance; there is
+    no automatic fallback.
 
 ## Known milestone-0 limitations
 
