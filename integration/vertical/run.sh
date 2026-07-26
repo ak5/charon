@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-fixture_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fixture_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 workload_name=charon-vertical-workload
 evidence_dir=${CHARON_EVIDENCE_DIRECTORY:-$fixture_dir/evidence}
 
@@ -31,7 +31,7 @@ export CHARON_CA_CERTIFICATE_PATH="$CHARON_FIXTURE_DIRECTORY/ca.pem"
 export CHARON_CA_PRIVATE_KEY_PATH="$CHARON_FIXTURE_DIRECTORY/ca-key.pem"
 export CHARON_ROOT_CA_CERTIFICATE_PATH="$CHARON_FIXTURE_DIRECTORY/root-ca.pem"
 export CHARON_MANIFEST_DIRECTORY="$CHARON_FIXTURE_DIRECTORY/manifests"
-export CHARON_RUNTIME_UID=${CHARON_RUNTIME_UID:-$(id -u)}
+export CHARON_RUNTIME_UID="${CHARON_RUNTIME_UID:-$(id -u)}"
 
 compose build workload
 cargo run --locked --quiet --example vertical_fixture -- issue "$CHARON_FIXTURE_DIRECTORY"

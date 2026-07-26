@@ -33,6 +33,14 @@ fn fixture() -> Result<(TempDir, VaultwardenConfig)> {
     write(&directory.path().join("session"), "fixture-session")?;
     write(&directory.path().join("secret"), "first-secret\n")?;
     std::fs::create_dir(directory.path().join("appdata"))?;
+    for path in [
+        directory.path().join("session"),
+        directory.path().join("appdata"),
+    ] {
+        let mut permissions = std::fs::metadata(&path)?.permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(path, permissions)?;
+    }
     let config = VaultwardenConfig {
         cli_path: cli,
         appdata_dir: directory.path().join("appdata"),
@@ -54,6 +62,7 @@ async fn cache_is_bounded_and_restart_observes_rotation() -> Result<()> {
     let reference = SecretRef::from_policy("github/developer");
     let first = provider.resolve(&reference).await?;
     assert_eq!(first.expose_secret(), "first-secret");
+    assert!(!fixture.path().join("inherited-environment").exists());
 
     write(&fixture.path().join("secret"), "rotated-secret\n")?;
     let cached = provider.resolve(&reference).await?;
@@ -66,6 +75,24 @@ async fn cache_is_bounded_and_restart_observes_rotation() -> Result<()> {
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     let after_expiry = provider.resolve(&reference).await?;
     assert_eq!(after_expiry.expose_secret(), "rotated-secret");
+    Ok(())
+}
+
+#[test]
+fn rejects_over_permissive_session_and_vault_state() -> Result<()> {
+    let (_fixture, config) = fixture()?;
+    let mut permissions = std::fs::metadata(&config.session_file)?.permissions();
+    permissions.set_mode(0o644);
+    std::fs::set_permissions(&config.session_file, permissions)?;
+    assert!(VaultwardenProvider::new(config.clone()).is_err());
+
+    let mut permissions = std::fs::metadata(&config.session_file)?.permissions();
+    permissions.set_mode(0o600);
+    std::fs::set_permissions(&config.session_file, permissions)?;
+    let mut permissions = std::fs::metadata(&config.appdata_dir)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&config.appdata_dir, permissions)?;
+    assert!(VaultwardenProvider::new(config).is_err());
     Ok(())
 }
 

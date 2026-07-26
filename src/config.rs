@@ -8,7 +8,23 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
+use http::{HeaderName, HeaderValue};
 use serde::Deserialize;
+
+const MAX_IDENTITY_TTL_SECONDS: u64 = 300;
+const MAX_CLOCK_SKEW_SECONDS: u64 = 30;
+const FORBIDDEN_INJECTION_HEADERS: [&str; 10] = [
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+];
 
 /// Process configuration loaded from a TOML file.
 #[derive(Clone, Debug, Deserialize)]
@@ -199,7 +215,7 @@ impl Config {
         let mut names = HashSet::new();
         let mut hosts = HashSet::new();
         for service in &self.services {
-            if !names.insert(service.name.as_str()) {
+            if !is_identifier(&service.name) || !names.insert(service.name.as_str()) {
                 bail!("duplicate service name: {}", service.name);
             }
             if service.hosts.is_empty() {
@@ -217,6 +233,29 @@ impl Config {
                     service.name
                 );
             }
+            let injection_header: HeaderName = service
+                .header
+                .parse()
+                .with_context(|| format!("service {} has an invalid header", service.name))?;
+            if FORBIDDEN_INJECTION_HEADERS.contains(&injection_header.as_str()) {
+                bail!("service {} uses a forbidden injection header", service.name);
+            }
+            HeaderValue::from_str(&service.placeholder)
+                .with_context(|| format!("service {} has an invalid placeholder", service.name))?;
+            if service.placeholder.is_empty()
+                || service.secret_ref.is_empty()
+                || service.secret_ref.len() > 256
+            {
+                bail!("service {} has invalid credential policy", service.name);
+            }
+            if matches!(&self.provider, ProviderConfig::Environment)
+                && !is_environment_reference(&service.secret_ref)
+            {
+                bail!(
+                    "service {} environment reference must use the CHARON_ namespace",
+                    service.name
+                );
+            }
             if let Some(refs) = &vault_refs
                 && !refs.contains(service.secret_ref.as_str())
             {
@@ -227,7 +266,7 @@ impl Config {
             }
             for host in &service.hosts {
                 let normalized = host.to_ascii_lowercase();
-                if host.contains('*') || host.contains('/') || host.contains(':') {
+                if !is_exact_host(host) {
                     bail!(
                         "service {} has invalid exact hostname: {host}",
                         service.name
@@ -290,11 +329,20 @@ impl Config {
     }
 
     fn validate_identity(&self) -> Result<()> {
-        if self.identity.issuer.is_empty() || self.identity.audience.is_empty() {
+        if self.identity.issuer.is_empty()
+            || self.identity.issuer.len() > 256
+            || self.identity.audience.is_empty()
+            || self.identity.audience.len() > 256
+        {
             bail!("identity issuer and audience must not be empty");
         }
-        if self.identity.max_ttl_seconds == 0 {
-            bail!("identity max_ttl_seconds must be positive");
+        if self.identity.max_ttl_seconds == 0
+            || self.identity.max_ttl_seconds > MAX_IDENTITY_TTL_SECONDS
+        {
+            bail!("identity max_ttl_seconds must be between 1 and 300");
+        }
+        if self.identity.clock_skew_seconds > MAX_CLOCK_SKEW_SECONDS {
+            bail!("identity clock_skew_seconds must not exceed 30");
         }
         let public_key = base64::engine::general_purpose::STANDARD
             .decode(&self.identity.public_key)
@@ -313,7 +361,7 @@ impl Config {
             .collect();
         let mut capability_names = HashSet::new();
         for capability in &self.capabilities {
-            if capability.name.is_empty() || capability.persona.is_empty() {
+            if !is_identifier(&capability.name) || !is_identifier(&capability.persona) {
                 bail!("capability name and persona must not be empty");
             }
             if !capability_names.insert(capability.name.as_str()) {
@@ -438,6 +486,48 @@ fn is_uuid(value: &str) -> bool {
         })
 }
 
+fn is_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn is_environment_reference(value: &str) -> bool {
+    value.strip_prefix("CHARON_").is_some_and(|suffix| {
+        !suffix.is_empty()
+            && suffix.len() <= 120
+            && suffix
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+    })
+}
+
+fn is_exact_host(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 253
+        || !value.is_ascii()
+        || value.contains(['*', '/', ':'])
+        || value.starts_with('.')
+        || value.ends_with('.')
+    {
+        return false;
+    }
+    if value.parse::<std::net::Ipv4Addr>().is_ok() {
+        return true;
+    }
+    value.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use base64::Engine as _;
@@ -506,6 +596,14 @@ mod tests {
         let mut candidate = config();
         candidate.services[0].hosts = vec!["*.github.com".into()];
         assert!(candidate.validate().is_err());
+
+        let mut trailing_dot = config();
+        trailing_dot.services[0].hosts = vec!["api.github.com.".into()];
+        assert!(trailing_dot.validate().is_err());
+
+        let mut empty_label = config();
+        empty_label.services[0].hosts = vec!["api..github.com".into()];
+        assert!(empty_label.validate().is_err());
     }
 
     #[test]
@@ -551,6 +649,29 @@ mod tests {
             password_file: Some("/run/credentials/egress-password".into()),
         });
         assert!(protected.validate().is_ok());
+    }
+
+    #[test]
+    fn identity_and_injection_policy_are_bounded() {
+        let mut long_lived = config();
+        long_lived.identity.max_ttl_seconds = 301;
+        assert!(long_lived.validate().is_err());
+
+        let mut excessive_skew = config();
+        excessive_skew.identity.clock_skew_seconds = 31;
+        assert!(excessive_skew.validate().is_err());
+
+        let mut unsafe_header = config();
+        unsafe_header.services[0].header = "host".into();
+        assert!(unsafe_header.validate().is_err());
+
+        let mut invalid_placeholder = config();
+        invalid_placeholder.services[0].placeholder = "Bearer value\r\ninjected: true".into();
+        assert!(invalid_placeholder.validate().is_err());
+
+        let mut ambient_environment = config();
+        ambient_environment.services[0].secret_ref = "AWS_SECRET_ACCESS_KEY".into();
+        assert!(ambient_environment.validate().is_err());
     }
 
     #[test]

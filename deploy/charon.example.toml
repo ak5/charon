@@ -1,5 +1,5 @@
-# Copy and customize this example. The release workflow accepts the deployed
-# policy through the protected CHARON_DEPLOY_CONFIG_B64 environment variable.
+# Copy and customize this example in the operator-owned deployment system.
+# Public GitHub workflows never receive or deploy this policy.
 listen = "0.0.0.0:3129"
 
 [realm]

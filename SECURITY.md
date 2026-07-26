@@ -9,3 +9,7 @@ credentials, request captures, vault exports, or authentication headers.
 
 The current security invariants and known limitations are maintained in
 [`docs/threat-model.md`](docs/threat-model.md).
+
+The latest owner audit, remediated findings, residual risks, and production
+release gate are recorded in
+[`docs/security-audit-2026-07-27.md`](docs/security-audit-2026-07-27.md).

@@ -33,6 +33,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: false
+          provenance: mode=max
+          sbom: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
@@ -49,6 +51,8 @@ jobs:
           file: integration/vertical/Dockerfile
           platforms: linux/amd64
           push: false
+          provenance: mode=max
+          sbom: true
           tags: charon-vertical-workload:test
           cache-from: type=gha,scope=vertical-workload
           cache-to: type=gha,mode=max,scope=vertical-workload

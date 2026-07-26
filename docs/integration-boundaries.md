@@ -14,7 +14,7 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Secret provider | Charon → provider adapter | Rust `SecretProvider`; opaque policy-owned reference in, `SecretString` out | trusted with only its realm's secrets | readiness, bounded caching, non-disclosure, fail-closed errors |
 | Realm reconciler | operator → runtime | declarative desired/observed objects; schemas in [`contracts/`](../contracts/) | privileged control plane | no lifecycle mutation API; only runtime health and identity |
 | Runtime probe | operator → Charon | HTTP origin endpoints; [`openapi.yaml`](../contracts/openapi.yaml) | network-restricted observer | liveness and credential-free readiness |
-| Destination | Charon → exact host | HTTP(S), optionally through configured egress | untrusted response source | credential injection after authorization; redirects disabled |
+| Destination | Charon → exact host | HTTPS on port 443, optionally through configured egress; literal loopback HTTP only for local fixtures | untrusted response source | credential injection after authorization; redirects disabled |
 | Upstream egress | Charon → proxy | HTTP(S) forward proxy with optional protected file-backed Basic auth | routing dependency, not an authorization source | exact destination authorization remains local |
 | PKI | operator → Charon/workload | offline root and one realm intermediate | operator trust boundary | exact-host leaf issuance; PKI never selects persona or capability |
 | Audit sink | Charon → logs | structured JSON events | may observe approved identifiers only | no headers, bodies, manifests, nonces, provider references, sessions, or keys |
@@ -73,4 +73,3 @@ authority or prescribe a transport.
 
 This separation prevents an Internet-facing credential data plane from also
 becoming a privileged lifecycle control plane.
-

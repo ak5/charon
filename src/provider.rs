@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    path::Path,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -107,11 +108,10 @@ impl VaultwardenProvider {
     /// Returns an error if the CLI is not an executable file or an item mapping
     /// is ambiguous.
     pub fn new(config: VaultwardenConfig) -> Result<Self> {
-        if !config.cli_path.is_file() {
-            bail!("Vaultwarden CLI is unavailable");
-        }
-        if !config.appdata_dir.is_dir() {
-            bail!("Vaultwarden encrypted vault state is unavailable");
+        ensure_executable(&config.cli_path)?;
+        ensure_private_directory(&config.appdata_dir)?;
+        if config.session_file.try_exists().unwrap_or(false) {
+            ensure_private_file(&config.session_file, "Vaultwarden session")?;
         }
         let mut items = HashMap::new();
         for mapping in &config.items {
@@ -139,6 +139,8 @@ impl VaultwardenProvider {
     }
 
     fn session(&self) -> Result<SecretString> {
+        ensure_private_file(&self.config.session_file, "Vaultwarden session")
+            .map_err(|_| anyhow::anyhow!("Vaultwarden provider is locked"))?;
         let session = std::fs::read_to_string(&self.config.session_file)
             .map_err(|_| anyhow::anyhow!("Vaultwarden provider is locked"))?;
         if session.is_empty() || session.chars().any(char::is_whitespace) {
@@ -151,6 +153,8 @@ impl VaultwardenProvider {
         let mut command = Command::new(&self.config.cli_path);
         command
             .args(args)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
             .env("BW_SESSION", session.expose_secret())
             .env("BITWARDENCLI_APPDATA_DIR", &self.config.appdata_dir)
             .kill_on_drop(true);
@@ -167,18 +171,23 @@ impl VaultwardenProvider {
             output.stderr.zeroize();
             bail!("Vaultwarden provider is unavailable");
         }
-        let status: VaultStatus = serde_json::from_slice(&output.stdout).map_err(|error| {
-            tracing::warn!(
-                outcome = "vaultwarden_status_invalid",
-                command_success = output.status.success(),
-                stdout_bytes = output.stdout.len(),
-                stderr_bytes = output.stderr.len(),
-                json_error_line = error.line(),
-                json_error_column = error.column(),
-                "Vaultwarden CLI returned an invalid status shape"
-            );
-            anyhow::anyhow!("Vaultwarden provider returned an invalid status")
-        })?;
+        let status: VaultStatus = match serde_json::from_slice(&output.stdout) {
+            Ok(status) => status,
+            Err(error) => {
+                tracing::warn!(
+                    outcome = "vaultwarden_status_invalid",
+                    command_success = output.status.success(),
+                    stdout_bytes = output.stdout.len(),
+                    stderr_bytes = output.stderr.len(),
+                    json_error_line = error.line(),
+                    json_error_column = error.column(),
+                    "Vaultwarden CLI returned an invalid status shape"
+                );
+                output.stdout.zeroize();
+                output.stderr.zeroize();
+                bail!("Vaultwarden provider returned an invalid status");
+            }
+        };
         output.stdout.zeroize();
         output.stderr.zeroize();
         if status.status != "unlocked" {
@@ -222,6 +231,66 @@ impl VaultwardenProvider {
         }
         Ok(SecretString::from(value))
     }
+}
+
+#[cfg(unix)]
+pub(crate) fn ensure_private_file(path: &Path, description: &str) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata =
+        std::fs::symlink_metadata(path).with_context(|| format!("{description} is unavailable"))?;
+    if !metadata.file_type().is_file() || metadata.permissions().mode() & 0o077 != 0 {
+        bail!("{description} must be a private regular file");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn ensure_private_file(path: &Path, description: &str) -> Result<()> {
+    if !path.is_file() {
+        bail!("{description} must be a private regular file");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_private_directory(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = std::fs::symlink_metadata(path)
+        .context("Vaultwarden encrypted vault state is unavailable")?;
+    if !metadata.file_type().is_dir() || metadata.permissions().mode() & 0o077 != 0 {
+        bail!("Vaultwarden encrypted vault state must be a private directory");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_directory(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        bail!("Vaultwarden encrypted vault state must be a private directory");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn ensure_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let metadata = std::fs::symlink_metadata(path).context("Vaultwarden CLI is unavailable")?;
+    let mode = metadata.permissions().mode();
+    if !metadata.file_type().is_file() || mode & 0o100 == 0 || mode & 0o022 != 0 {
+        bail!("Vaultwarden CLI must be a non-writable executable file");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_executable(path: &Path) -> Result<()> {
+    if !path.is_file() {
+        bail!("Vaultwarden CLI must be an executable file");
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]

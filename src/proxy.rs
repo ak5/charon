@@ -1,6 +1,6 @@
 //! Fail-closed HTTP credential injection data plane.
 
-use std::{convert::Infallible, sync::Arc, time::Duration};
+use std::{collections::HashSet, convert::Infallible, net::IpAddr, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -24,7 +24,7 @@ use zeroize::Zeroize;
 use crate::{
     config::{Config, ServicePolicy},
     identity::{AuthorizedWorkload, IDENTITY_HEADER, IdentityVerifier},
-    provider::{SecretProvider, SecretRef},
+    provider::{SecretProvider, SecretRef, ensure_private_file},
     tls::TlsAuthority,
 };
 
@@ -32,8 +32,10 @@ const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RESPONSE_BODY_BYTES: usize = 16 * 1024 * 1024;
 const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const TUNNEL_TIMEOUT: Duration = Duration::from_mins(1);
-const HOP_BY_HOP_HEADERS: [&str; 8] = [
+const HOP_BY_HOP_HEADERS: [&str; 10] = [
     "connection",
+    "content-length",
+    "host",
     "keep-alive",
     "proxy-authenticate",
     "proxy-authorization",
@@ -69,6 +71,7 @@ impl AppState {
             let mut reqwest_proxy =
                 reqwest::Proxy::all(&proxy.url).context("invalid upstream proxy")?;
             if let (Some(username), Some(password_file)) = (&proxy.username, &proxy.password_file) {
+                ensure_private_file(password_file, "upstream proxy credential")?;
                 let password = std::fs::read_to_string(password_file)
                     .context("upstream proxy credential is unavailable")?;
                 if password.is_empty() || password.chars().any(char::is_whitespace) {
@@ -153,6 +156,7 @@ async fn forward(State(state): State<Arc<AppState>>, mut request: Request) -> Re
 async fn forward_inner(state: &AppState, request: Request) -> Result<Response> {
     let (parts, body) = request.into_parts();
     let target = absolute_target(&parts.uri)?;
+    validate_request_authority(&parts.headers, &target)?;
     if target.query().is_some() {
         warn!(
             method = %parts.method,
@@ -172,16 +176,8 @@ async fn forward_inner(state: &AppState, request: Request) -> Result<Response> {
         warn!(host, method = %parts.method, outcome = "host_denied", "request denied");
         return Ok((StatusCode::FORBIDDEN, "destination is not allowed").into_response());
     };
-    if let Err(error) = enforce_content_length(&parts.headers, MAX_REQUEST_BODY_BYTES, "request") {
-        warn!(
-            service = policy.name,
-            host,
-            method = %parts.method,
-            reason = %error,
-            outcome = "request_size_denied",
-            "request denied"
-        );
-        return Ok((StatusCode::PAYLOAD_TOO_LARGE, "request body is too large").into_response());
+    if let Some(response) = request_size_denial(&parts.headers, policy, host, &parts.method) {
+        return Ok(response);
     }
 
     let identity = match authorize_workload(state, policy, &parts.headers, &parts.method, &target) {
@@ -212,16 +208,17 @@ async fn forward_inner(state: &AppState, request: Request) -> Result<Response> {
         .secrets
         .resolve(&SecretRef::from_policy(&policy.secret_ref))
         .await?;
-    let rendered = policy
+    let mut rendered = policy
         .value_template
         .replace("{secret}", secret.expose_secret());
-    let injected =
-        HeaderValue::from_str(&rendered).context("rendered credential is not a header")?;
+    let injected = HeaderValue::from_str(&rendered);
+    rendered.zeroize();
+    let injected = injected.context("rendered credential is not a header")?;
 
     let mut upstream = state
         .client
         .request(parts.method.clone(), target.to_string());
-    for (name, value) in filtered_headers(&parts.headers) {
+    for (name, value) in filtered_headers(&parts.headers)? {
         if name != injection_header {
             upstream = upstream.header(name, value);
         }
@@ -258,6 +255,24 @@ async fn forward_inner(state: &AppState, request: Request) -> Result<Response> {
     downstream_response(status, &response_headers, response_body)
 }
 
+fn request_size_denial(
+    headers: &HeaderMap,
+    policy: &ServicePolicy,
+    host: &str,
+    method: &Method,
+) -> Option<Response> {
+    let error = enforce_content_length(headers, MAX_REQUEST_BODY_BYTES, "request").err()?;
+    warn!(
+        service = policy.name,
+        host,
+        method = %method,
+        reason = %error,
+        outcome = "request_size_denied",
+        "request denied"
+    );
+    Some((StatusCode::PAYLOAD_TOO_LARGE, "request body is too large").into_response())
+}
+
 fn audit_forwarded(
     state: &AppState,
     identity: &AuthorizedWorkload,
@@ -289,7 +304,7 @@ fn audit_forwarded(
 
 fn downstream_response(status: StatusCode, headers: &HeaderMap, body: Body) -> Result<Response> {
     let mut output = Response::builder().status(status);
-    for (name, value) in filtered_headers(headers) {
+    for (name, value) in filtered_headers(headers)? {
         output = output.header(name, value);
     }
     output
@@ -375,6 +390,21 @@ fn prepare_connect(
             (StatusCode::BAD_REQUEST, "CONNECT authority is required").into_response(),
         ));
     };
+    if let Some(host) = request
+        .headers()
+        .get(http::header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<http::uri::Authority>().ok())
+        && !same_tls_authority(authority, &host)
+    {
+        return Err(Box::new(
+            (
+                StatusCode::MISDIRECTED_REQUEST,
+                "CONNECT authority mismatch",
+            )
+                .into_response(),
+        ));
+    }
     if authority.port_u16() != Some(443) {
         return Err(Box::new(
             (StatusCode::FORBIDDEN, "CONNECT requires explicit port 443").into_response(),
@@ -641,26 +671,80 @@ fn absolute_target(uri: &Uri) -> Result<reqwest::Url> {
         anyhow::bail!("forward-proxy requests must use an absolute URI");
     }
     let target = reqwest::Url::parse(&uri.to_string()).context("invalid absolute target URI")?;
-    if !matches!(target.scheme(), "http" | "https") {
-        anyhow::bail!("only HTTP and HTTPS targets are supported");
+    if !target.username().is_empty() || target.password().is_some() {
+        anyhow::bail!("target user information is forbidden");
+    }
+    let host = target
+        .host_str()
+        .context("absolute target has no hostname")?;
+    let loopback_http = target.scheme() == "http"
+        && host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    if target.scheme() != "https" && !loopback_http {
+        anyhow::bail!("credential-bearing targets require HTTPS");
+    }
+    if target.scheme() == "https" && target.port_or_known_default() != Some(443) {
+        anyhow::bail!("HTTPS targets require port 443");
     }
     Ok(target)
 }
 
-fn filtered_headers(headers: &HeaderMap) -> impl Iterator<Item = (&HeaderName, &HeaderValue)> {
-    headers.iter().filter(|(name, _)| {
-        !HOP_BY_HOP_HEADERS
-            .iter()
-            .any(|blocked| name.as_str().eq_ignore_ascii_case(blocked))
-    })
+fn validate_request_authority(headers: &HeaderMap, target: &reqwest::Url) -> Result<()> {
+    let Some(value) = headers.get(http::header::HOST) else {
+        return Ok(());
+    };
+    let authority: http::uri::Authority = value
+        .to_str()
+        .context("Host header is invalid")?
+        .parse()
+        .context("Host header authority is invalid")?;
+    let target_host = target.host_str().context("target hostname is missing")?;
+    let target_port = target.port_or_known_default();
+    let authority_port = authority
+        .port_u16()
+        .or_else(|| (target.scheme() == "https").then_some(443))
+        .or_else(|| (target.scheme() == "http").then_some(80));
+    if !authority.host().eq_ignore_ascii_case(target_host) || authority_port != target_port {
+        anyhow::bail!("Host header does not match the request target");
+    }
+    Ok(())
+}
+
+fn filtered_headers(headers: &HeaderMap) -> Result<Vec<(HeaderName, HeaderValue)>> {
+    let mut blocked = HOP_BY_HOP_HEADERS
+        .iter()
+        .map(|name| HeaderName::from_static(name))
+        .collect::<HashSet<_>>();
+    for value in headers.get_all(http::header::CONNECTION) {
+        for token in value
+            .to_str()
+            .context("Connection header is invalid")?
+            .split(',')
+        {
+            let name: HeaderName = token
+                .trim()
+                .parse()
+                .context("Connection header names an invalid field")?;
+            blocked.insert(name);
+        }
+    }
+    let mut filtered = Vec::new();
+    for (name, value) in headers {
+        if !blocked.contains(name) {
+            filtered.push((name.clone(), value.clone()));
+        }
+    }
+    Ok(filtered)
 }
 
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
     use futures_util::{StreamExt as _, stream};
+    use http::{HeaderMap, HeaderValue, Uri};
 
-    use super::limited_stream;
+    use super::{absolute_target, filtered_headers, limited_stream, validate_request_authority};
 
     #[tokio::test]
     async fn counted_stream_allows_the_limit_and_errors_above_it() {
@@ -688,5 +772,54 @@ mod tests {
         .await;
         assert!(denied[0].is_ok());
         assert!(denied[1].is_err());
+    }
+
+    #[test]
+    fn remote_targets_require_https_on_the_default_port_without_userinfo() {
+        let plaintext: Uri = "http://api.github.com/user"
+            .parse()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(absolute_target(&plaintext).is_err());
+
+        let alternate_port: Uri = "https://api.github.com:8443/user"
+            .parse()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(absolute_target(&alternate_port).is_err());
+
+        let userinfo: Uri = "https://user@api.github.com/user"
+            .parse()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(absolute_target(&userinfo).is_err());
+
+        let allowed: Uri = "https://api.github.com/user"
+            .parse()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(absolute_target(&allowed).is_ok());
+
+        let loopback: Uri = "http://127.0.0.1:8080/test"
+            .parse()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(absolute_target(&loopback).is_ok());
+    }
+
+    #[test]
+    fn conflicting_authority_and_connection_nominated_headers_are_removed() {
+        let target = reqwest::Url::parse("https://api.github.com/user")
+            .unwrap_or_else(|error| panic!("{error}"));
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("evil.example"));
+        assert!(validate_request_authority(&headers, &target).is_err());
+
+        headers.insert("host", HeaderValue::from_static("api.github.com"));
+        headers.insert("connection", HeaderValue::from_static("x-remove"));
+        headers.insert("x-remove", HeaderValue::from_static("attacker-controlled"));
+        headers.insert("x-keep", HeaderValue::from_static("safe"));
+        let filtered = filtered_headers(&headers).unwrap_or_else(|error| panic!("{error}"));
+        assert!(
+            filtered
+                .iter()
+                .all(|(name, _)| name != "host" && name != "connection" && name != "x-remove")
+        );
+        assert!(filtered.iter().any(|(name, _)| name == "x-keep"));
     }
 }

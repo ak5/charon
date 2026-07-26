@@ -35,12 +35,10 @@ capability without placing the underlying credential in that workload.
   from runtime hosts, containers, workspace images, backups, and artifacts;
   workspace images contain only the root certificate.
 - **Release path:** only a successful trusted `main` CI run may publish an
-  immutable image. An operator-selected protected GitHub environment holds the
-  SSH deploy key; pull-request jobs receive neither that key nor package-write
-  permission. The operator confines the deploy account to Charon's host path. The
-  trusted deploy job streams its short-lived, job-scoped `packages: read` token
-  over SSH stdin into an isolated Docker config that is removed after the pull;
-  no persistent registry credential is provisioned on the host.
+  immutable image. Pull-request jobs receive no package-write permission. The
+  public workflow uses GitHub-hosted runners, digest-pinned build/runtime bases,
+  a commit-SHA image tag, and BuildKit provenance and SBOM attestations. It has
+  no deployment-host access or deployment credential.
 
 ## Security invariants
 
@@ -97,6 +95,24 @@ capability without placing the underlying credential in that workload.
 19. Workspace images trust one offline root certificate. Only a realm's
     root-signed intermediate key is deployed. PKI does not replace endpoint
     isolation, exact request authorization, or direct-egress denial.
+20. Credential-bearing remote requests require HTTPS on port 443. Plaintext
+    HTTP is accepted only for literal loopback addresses used by local fixtures.
+    URL user information, conflicting `Host`/authority values, and alternate
+    TLS ports fail before identity consumption or credential resolution.
+21. Static and `Connection`-nominated hop-by-hop fields, caller-supplied
+    `Host`, and caller-supplied framing headers are removed before forwarding.
+    Credential injection headers cannot be configured as routing, framing,
+    proxy-authentication, or hop-by-hop headers.
+22. Workload manifests, audit identifiers, TTL, and clock skew have explicit
+    size/time bounds. Audit identifiers accept only a small printable
+    identifier alphabet.
+23. Vaultwarden subprocesses inherit no ambient Charon environment. The
+    executable is an exact absolute non-writable file; vault state is a private
+    directory; and session, interception-key, and upstream-proxy password inputs
+    are private regular files.
+24. Public container builds pin both Docker stages by manifest digest and emit
+    provenance and SBOM attestations. Dependabot covers Rust, GitHub Actions,
+    and Docker dependencies.
 
 ## Known milestone-0 limitations
 
@@ -113,3 +129,11 @@ capability without placing the underlying credential in that workload.
   a separate ADR and review meeting ADR 0003's criteria. The current in-memory
   replay cache is intentionally per-realm and single-instance; horizontal
   replicas require a shared atomic nonce store or issuer-side one-shot exchange.
+- Charon has bounded requests, responses, handshakes, tunnels, provider
+  commands, and manifest lifetimes, but no application-level connection or
+  request-rate limiter. Deployments must bound connections and resources at the
+  listener/container/network layer.
+- The configured Vaultwarden CLI and the system WebPKI/DNS path are trusted
+  dependencies. Runtime validates CLI path/type/permissions but does not
+  independently attest the executable digest; deployment must pin and verify
+  that artifact.

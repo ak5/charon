@@ -62,7 +62,7 @@ else
     result provider-failure denied
 fi
 
-if HTTPS_PROXY= HTTP_PROXY= ALL_PROXY= NO_PROXY='*' \
+if HTTPS_PROXY='' HTTP_PROXY='' ALL_PROXY='' NO_PROXY='*' \
     curl --connect-timeout 3 --fail --silent https://api.github.com/user \
     >/tmp/bypass.out 2>/tmp/bypass.err; then
     result direct-bypass unexpected-allow
