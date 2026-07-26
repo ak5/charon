@@ -1,0 +1,52 @@
+listen = "127.0.0.1:3129"
+
+[realm]
+id = "realm-developer"
+tenant = "tenant-example"
+persona = "developer"
+generation = 1
+# Production example:
+# [upstream_proxy]
+# url = "http://egress.example.internal:8888"
+# username = "egress"
+# password_file = "/run/credentials/egress-proxy-password"
+
+[provider]
+kind = "vaultwarden"
+cli_path = "/usr/local/bin/bw"
+appdata_dir = "/var/lib/charon/bitwarden-cli"
+session_file = "/run/credentials/charon-vaultwarden-session"
+cache_ttl_seconds = 30
+
+[tls]
+ca_certificate = "/run/charon-ca/ca.pem"
+ca_private_key = "/run/credentials/charon-ca-key.pem"
+
+[[provider.items]]
+secret_ref = "github/developer"
+persona = "developer"
+item_id = "00000000-0000-4000-8000-000000000001"
+
+[identity]
+issuer = "example-control-plane"
+audience = "charon"
+# Public test key only. The corresponding private key must be held by the
+# workload-identity issuer and is intentionally absent from Charon.
+public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+max_ttl_seconds = 60
+clock_skew_seconds = 2
+
+[[capabilities]]
+name = "github-read-user"
+persona = "developer"
+service = "github"
+methods = ["GET"]
+paths = ["/user"]
+
+[[services]]
+name = "github"
+hosts = ["api.github.com"]
+header = "authorization"
+placeholder = "Bearer charon-placeholder"
+value_template = "Bearer {secret}"
+secret_ref = "github/developer"

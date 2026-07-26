@@ -1,0 +1,52 @@
+listen = "0.0.0.0:3129"
+
+[realm]
+id = "realm-vertical-developer"
+tenant = "vertical-tenant"
+persona = "vertical-developer"
+generation = 1
+[upstream_proxy]
+url = "http://egress.example.internal:8888"
+username = "egress"
+password_file = "/run/credentials/egress-proxy-password"
+
+[provider]
+kind = "vaultwarden"
+cli_path = "/usr/local/bin/bw"
+appdata_dir = "/var/lib/charon/bitwarden-cli"
+session_file = "/run/credentials/charon-vaultwarden-session"
+cache_ttl_seconds = 5
+
+[[provider.items]]
+secret_ref = "github/vertical-developer"
+persona = "vertical-developer"
+# Replace with the exact disposable Vaultwarden item UUID.
+item_id = "00000000-0000-4000-8000-000000000001"
+
+[tls]
+ca_certificate = "/run/charon-ca/ca.pem"
+ca_private_key = "/run/credentials/charon-ca-key.pem"
+
+[identity]
+issuer = "fixture-control-plane"
+audience = "charon-integration"
+# Replace with the integration issuer's Ed25519 public key. The private key
+# remains outside Charon and every workload image/container.
+public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+max_ttl_seconds = 60
+clock_skew_seconds = 2
+
+[[capabilities]]
+name = "github-read-user"
+persona = "vertical-developer"
+service = "github"
+methods = ["GET"]
+paths = ["/user"]
+
+[[services]]
+name = "github"
+hosts = ["api.github.com"]
+header = "authorization"
+placeholder = "token charon-placeholder"
+value_template = "token {secret}"
+secret_ref = "github/vertical-developer"

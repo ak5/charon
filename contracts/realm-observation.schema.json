@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:realm-observation:v1",
+  "title": "Charon realm observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "realm_id",
+    "observed_generation",
+    "state",
+    "reason",
+    "observed_at"
+  ],
+  "properties": {
+    "api_version": { "const": "charon/v1" },
+    "realm_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "observed_generation": { "type": "integer", "minimum": 1 },
+    "state": {
+      "enum": [
+        "provisioning",
+        "ready",
+        "degraded",
+        "locked",
+        "revoked",
+        "removing",
+        "removed"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9_]+$"
+    },
+    "observed_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
+

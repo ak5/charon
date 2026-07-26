@@ -1,0 +1,60 @@
+x-charon: &charon
+  image: "${CHARON_IMAGE:?set an immutable Charon image}"
+  platform: linux/amd64
+  user: "${CHARON_RUNTIME_UID:?set the protected runtime owner UID}"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs:
+    - "/tmp:mode=1777,size=16m"
+  networks:
+    - workload
+    - upstream
+  volumes:
+    - "${CHARON_CONFIG_PATH:?set the reviewed vertical config}:/etc/charon/charon.toml:ro"
+    - "${CHARON_BW_CLI_PATH:?set the pinned native bw executable}:/usr/local/bin/bw:ro"
+    - "${CHARON_BW_APPDATA_PATH:?set encrypted CLI state}:/var/lib/charon/bitwarden-cli"
+    - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
+    - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
+    - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
+  command: ["--config", "/etc/charon/charon.toml"]
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/charon", "healthcheck", "http://127.0.0.1:3129/healthz"]
+    interval: 2s
+    timeout: 2s
+    retries: 15
+    start_period: 2s
+
+services:
+  charon:
+    <<: *charon
+    volumes:
+      - "${CHARON_CONFIG_PATH:?set the reviewed vertical config}:/etc/charon/charon.toml:ro"
+      - "${CHARON_BW_CLI_PATH:?set the pinned native bw executable}:/usr/local/bin/bw:ro"
+      - "${CHARON_BW_APPDATA_PATH:?set encrypted CLI state}:/var/lib/charon/bitwarden-cli"
+      - "${CHARON_BW_SESSION_PATH:?set the memory-backed unlock session}:/run/credentials/charon-vaultwarden-session:ro"
+      - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
+      - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
+      - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
+
+  charon-locked:
+    <<: *charon
+
+  workload:
+    build:
+      context: .
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - "/tmp:mode=1777,size=8m"
+    networks:
+      - workload
+    volumes:
+      - "${CHARON_ROOT_CA_CERTIFICATE_PATH:?set public root CA path}:/etc/charon-ca/ca.pem:ro"
+      - "${CHARON_MANIFEST_DIRECTORY:?set fresh test manifests}:/manifests:ro"
+
+networks:
+  workload:
+    internal: true
+  upstream: {}

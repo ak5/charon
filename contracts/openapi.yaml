@@ -1,0 +1,72 @@
+openapi: 3.1.0
+info:
+  title: Charon runtime probe API
+  version: 1.0.0
+  description: >
+    Liveness and credential-free readiness endpoints. Charon's forward-proxy
+    data plane and external reconciler are separate protocols and are not
+    represented as REST operations.
+paths:
+  /healthz:
+    get:
+      operationId: getLiveness
+      summary: Report that the Charon process is serving requests
+      responses:
+        "204":
+          description: Process is live
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: Report realm identity and provider readiness
+      responses:
+        "200":
+          description: Configured provider is ready without resolving a secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+        "503":
+          description: Provider is locked or unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Unavailable"
+components:
+  schemas:
+    RuntimeIdentity:
+      type: object
+      additionalProperties: false
+      required: [status, realm, tenant, persona, generation]
+      properties:
+        status:
+          type: string
+        realm:
+          type: string
+          minLength: 1
+          maxLength: 128
+        tenant:
+          type: string
+          minLength: 1
+          maxLength: 128
+        persona:
+          type: string
+          minLength: 1
+          maxLength: 128
+        generation:
+          type: integer
+          minimum: 1
+    Readiness:
+      allOf:
+        - $ref: "#/components/schemas/RuntimeIdentity"
+        - type: object
+          properties:
+            status:
+              const: ready
+    Unavailable:
+      allOf:
+        - $ref: "#/components/schemas/RuntimeIdentity"
+        - type: object
+          properties:
+            status:
+              const: unavailable
+

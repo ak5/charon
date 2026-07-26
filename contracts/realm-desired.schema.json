@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:realm-desired:v1",
+  "title": "Charon desired realm",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "realm_id",
+    "tenant_id",
+    "persona_id",
+    "generation",
+    "image_digest",
+    "listener",
+    "config_path",
+    "state_root",
+    "runtime_root",
+    "ca_generation"
+  ],
+  "properties": {
+    "api_version": { "const": "charon/v1" },
+    "realm_id": { "$ref": "#/$defs/identifier" },
+    "tenant_id": { "$ref": "#/$defs/identifier" },
+    "persona_id": { "$ref": "#/$defs/identifier" },
+    "generation": { "type": "integer", "minimum": 1 },
+    "image_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "listener": {
+      "type": "string",
+      "description": "Exact operator-assigned internal IP address and port"
+    },
+    "config_path": { "type": "string", "pattern": "^/" },
+    "state_root": { "type": "string", "pattern": "^/" },
+    "runtime_root": { "type": "string", "pattern": "^/" },
+    "ca_generation": { "$ref": "#/$defs/identifier" }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    }
+  }
+}
+

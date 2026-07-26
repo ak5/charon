@@ -1,0 +1,38 @@
+[tools]
+rust = "1.97.1"
+"github:EmbarkStudios/cargo-deny" = "0.20.2"
+
+[settings]
+disable_tools = []
+
+[tasks.check]
+description = "Run the complete local quality gate"
+depends = ["fmt-check", "clippy", "test", "deploy-test", "deny"]
+
+[tasks.deploy-test]
+description = "Test the fail-closed deployment and ephemeral registry auth contract"
+run = "sh tests/deploy_redeploy.sh"
+
+[tasks.fmt]
+description = "Format Rust sources"
+run = "cargo fmt --all"
+
+[tasks.fmt-check]
+description = "Check Rust formatting"
+run = "cargo fmt --all -- --check"
+
+[tasks.clippy]
+description = "Run Clippy with warnings denied"
+run = "cargo clippy --all-targets --all-features -- -D warnings"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test --all-targets --all-features"
+
+[tasks.deny]
+description = "Check dependency advisories, licenses, bans, and sources"
+run = "cargo deny check"
+
+[tasks.run]
+description = "Run Charon with the example development policy"
+run = "cargo run -- --config examples/charon.toml"

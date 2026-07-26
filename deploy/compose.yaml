@@ -1,0 +1,27 @@
+services:
+  charon:
+    image: ${CHARON_IMAGE:?set CHARON_IMAGE to an immutable sha tag}
+    container_name: charon
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    ports:
+      - "${CHARON_BIND_IP:?set CHARON_BIND_IP to the approved internal address}:3129:3129"
+    environment:
+      CHARON_TEST_CREDENTIAL: ${CHARON_TEST_CREDENTIAL:?set a disposable test credential}
+      RUST_LOG: charon=info
+    volumes:
+      - ./charon.toml:/etc/charon/charon.toml:ro
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/charon", "healthcheck", "http://127.0.0.1:3129/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+    labels:
+      org.opencontainers.image.revision: ${CHARON_REVISION:?set CHARON_REVISION to the full commit SHA}

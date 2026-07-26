@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:workload-claims:v1",
+  "title": "Charon workload identity claims",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "iss",
+    "aud",
+    "sub",
+    "tenant",
+    "persona",
+    "workspace",
+    "lease",
+    "operation",
+    "capability",
+    "jti",
+    "iat",
+    "nbf",
+    "exp"
+  ],
+  "properties": {
+    "iss": { "$ref": "#/$defs/identifier" },
+    "aud": { "$ref": "#/$defs/identifier" },
+    "sub": { "$ref": "#/$defs/identifier" },
+    "tenant": { "$ref": "#/$defs/identifier" },
+    "persona": { "$ref": "#/$defs/identifier" },
+    "workspace": { "$ref": "#/$defs/identifier" },
+    "lease": { "$ref": "#/$defs/identifier" },
+    "operation": { "$ref": "#/$defs/identifier" },
+    "capability": { "$ref": "#/$defs/identifier" },
+    "jti": { "type": "string", "minLength": 16 },
+    "iat": { "type": "integer", "minimum": 0 },
+    "nbf": { "type": "integer", "minimum": 0 },
+    "exp": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  }
+}
+

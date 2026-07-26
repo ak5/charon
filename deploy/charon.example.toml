@@ -1,0 +1,43 @@
+# Copy and customize this example. The release workflow accepts the deployed
+# policy through the protected CHARON_DEPLOY_CONFIG_B64 environment variable.
+listen = "0.0.0.0:3129"
+
+[realm]
+id = "realm-milestone-0"
+tenant = "tenant-milestone-0"
+persona = "milestone-0-test"
+generation = 1
+[upstream_proxy]
+url = "http://egress.example.internal:8888"
+
+# Milestone-0 only. The durable deployment switches to the Vaultwarden provider
+# after its provider identity and item mapping have been provisioned.
+[provider]
+kind = "environment"
+
+[identity]
+issuer = "example-control-plane"
+audience = "charon"
+# RFC 8032 public test-vector key. Milestone 0 performs only negative identity
+# smoke tests; a real issuer key is required before enabling signed workloads in
+# this deployed policy.
+public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+max_ttl_seconds = 60
+clock_skew_seconds = 2
+
+[[capabilities]]
+name = "github-read-user"
+persona = "milestone-0-test"
+service = "github-smoke-test"
+methods = ["GET"]
+paths = ["/user"]
+
+# Milestone 0 is deliberately limited to a disposable credential. Replace this
+# policy only after the production credential flow has been threat-modeled.
+[[services]]
+name = "github-smoke-test"
+hosts = ["api.github.com"]
+header = "authorization"
+placeholder = "Bearer charon-placeholder"
+value_template = "Bearer {secret}"
+secret_ref = "CHARON_TEST_CREDENTIAL"
