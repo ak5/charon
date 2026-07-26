@@ -29,7 +29,7 @@ use charon::{
         UpstreamProxyConfig,
     },
     identity::WorkloadClaims,
-    provider::{SecretProvider, SecretRef},
+    provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
     proxy::{AppState, app},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -47,12 +47,12 @@ struct StaticProvider(HashMap<String, String>);
 
 #[async_trait]
 impl SecretProvider for StaticProvider {
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> Result<SecretString> {
+    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
         self.0
             .get(secret_ref.as_str())
             .cloned()
             .map(SecretString::from)
-            .ok_or_else(|| anyhow!("missing test secret"))
+            .ok_or(ProviderError::SecretUnavailable)
     }
 }
 
@@ -309,7 +309,7 @@ struct CountingProvider {
 
 #[async_trait]
 impl SecretProvider for CountingProvider {
-    async fn resolve(&self, _secret_ref: &SecretRef<'_>) -> Result<SecretString> {
+    async fn resolve(&self, _secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(SecretString::from("must-not-be-read"))
     }

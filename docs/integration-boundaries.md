@@ -11,7 +11,7 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, placeholder, size, redirect, replay, and expiry enforcement |
 | Identity issuer | control plane → workload → Charon | Ed25519 signed compact manifest; [`workload-claims.schema.json`](../contracts/workload-claims.schema.json) | trusted only to assert identity and capability | offline signature verification and independent concrete-operation policy |
 | Operator configuration | operator → Charon | deny-unknown-fields TOML; example in [`examples/charon.toml`](../examples/charon.toml) | trusted administrative input | validation before listener bind |
-| Secret provider | Charon → provider adapter | Rust `SecretProvider`; opaque policy-owned reference in, `SecretString` out | trusted with only its realm's secrets | readiness, bounded caching, non-disclosure, fail-closed errors |
+| Secret provider | Charon → provider adapter | Rust `SecretProvider`; opaque policy-owned reference in, `SecretString` out, closed `ProviderError` failures | trusted with only its realm's secrets | readiness, bounded caching, non-disclosure, fail-closed errors |
 | Realm reconciler | operator → runtime | declarative desired/observed objects; schemas in [`contracts/`](../contracts/) | privileged control plane | no lifecycle mutation API; only runtime health and identity |
 | Runtime probe | operator → Charon | HTTP origin endpoints; [`openapi.yaml`](../contracts/openapi.yaml) | network-restricted observer | liveness and credential-free readiness |
 | Destination | Charon → exact host | HTTPS on port 443, optionally through configured egress; literal loopback HTTP only for local fixtures | untrusted response source | credential injection after authorization; redirects disabled |
@@ -53,10 +53,21 @@ opaque reference selected by trusted service policy and returns a
 `secrecy::SecretString`. Provider values must not implement `Debug`,
 serialization, or response conversion.
 
+Adapter failures cross the boundary only as the closed, data-free
+`ProviderError` variants. Raw SDK, HTTP, CLI, account, item, and reference
+details remain inside the adapter. This makes coarse non-disclosure enforceable
+by the Rust type system instead of relying only on implementation convention.
+
 The current binary registers environment and Vaultwarden adapters at compile
 time. Adding a provider requires a configuration variant, validation, adapter
 construction, and fail-closed tests. Charon intentionally does not load
 third-party dynamic plugins into its credential-holding process.
+
+The interface supports any number of reviewed backend implementations in the
+binary. A realm deliberately selects exactly one instance, so an outage cannot
+trigger backend fallback or change credential identity. “Multiple stores”
+therefore means interchangeable configured adapters across realms, not
+caller-selected routing within a request.
 
 One provider instance belongs to one realm. If a future realm needs several
 providers, local policy—not a manifest or request—must bind each service to a

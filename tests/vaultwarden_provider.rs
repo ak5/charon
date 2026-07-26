@@ -7,7 +7,7 @@ use std::{os::unix::fs::PermissionsExt as _, path::Path, time::Duration};
 use anyhow::Result;
 use charon::{
     config::{VaultItemMapping, VaultwardenConfig},
-    provider::{SecretProvider, SecretRef, VaultwardenProvider},
+    provider::{ProviderError, SecretProvider, SecretRef, VaultwardenProvider},
 };
 use secrecy::ExposeSecret as _;
 use tempfile::TempDir;
@@ -78,6 +78,31 @@ async fn cache_is_bounded_and_restart_observes_rotation() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn satisfies_the_secret_provider_contract() -> Result<()> {
+    let (_fixture, config) = fixture()?;
+    let provider = VaultwardenProvider::new(config)?;
+
+    provider.health().await?;
+    let value = provider
+        .resolve(&SecretRef::from_policy("github/developer"))
+        .await?;
+    assert_eq!(value.expose_secret(), "first-secret");
+
+    let Err(error) = provider
+        .resolve(&SecretRef::from_policy(
+            "policy/reference-that-is-not-mapped",
+        ))
+        .await
+    else {
+        panic!("an unmapped trusted-policy reference must fail closed");
+    };
+    assert_eq!(error, ProviderError::ReferenceNotMapped);
+    assert!(!error.to_string().contains("policy"));
+    assert!(!error.to_string().contains("github"));
+    Ok(())
+}
+
 #[test]
 fn rejects_over_permissive_session_and_vault_state() -> Result<()> {
     let (_fixture, config) = fixture()?;
@@ -112,7 +137,7 @@ async fn lock_outage_and_deleted_item_fail_without_leaking_values() -> Result<()
     else {
         panic!("fixture outage must fail");
     };
-    assert_eq!(error.to_string(), "Vaultwarden provider is unavailable");
+    assert_eq!(error, ProviderError::Unavailable);
     assert!(!error.to_string().contains("first-secret"));
 
     std::fs::remove_file(fixture.path().join("outage"))?;
@@ -123,7 +148,7 @@ async fn lock_outage_and_deleted_item_fail_without_leaking_values() -> Result<()
     else {
         panic!("deleted fixture item must fail");
     };
-    assert_eq!(error.to_string(), "Vaultwarden item is unavailable");
+    assert_eq!(error, ProviderError::SecretUnavailable);
 
     std::fs::remove_file(fixture.path().join("deleted"))?;
     std::fs::remove_file(fixture.path().join("session"))?;
@@ -131,13 +156,13 @@ async fn lock_outage_and_deleted_item_fail_without_leaking_values() -> Result<()
     let Err(error) = health_provider.health().await else {
         panic!("missing session must fail readiness");
     };
-    assert_eq!(error.to_string(), "Vaultwarden provider is locked");
+    assert_eq!(error, ProviderError::Locked);
     let Err(error) = VaultwardenProvider::new(config)?
         .resolve(&SecretRef::from_policy("github/developer"))
         .await
     else {
         panic!("missing session must stay locked");
     };
-    assert_eq!(error.to_string(), "Vaultwarden provider is locked");
+    assert_eq!(error, ProviderError::Locked);
     Ok(())
 }
