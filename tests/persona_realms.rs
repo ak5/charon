@@ -132,7 +132,7 @@ fn realm_config(address: std::net::SocketAddr, realm: &str, tenant: &str, person
             header: "authorization".into(),
             placeholder: "Bearer public-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: format!("fixture/{persona}"),
+            secret_ref: format!("CHARON_FIXTURE_{}", persona.to_ascii_uppercase()),
         }],
     }
 }

@@ -42,6 +42,9 @@ then requires the policy's exact destination hostname, method, path, and public
 placeholder. For HTTPS, the CONNECT hostname, TLS SNI, and decrypted request
 authority must also agree.
 
+Remote credential-bearing requests require HTTPS on port 443. Plaintext HTTP
+is accepted only for literal loopback addresses used by local fixtures.
+
 The capability persona maps to a caller-independent credential reference; the
 Vaultwarden provider maps that reference and persona to one exact configured
 item UUID. After every check passes, Charon replaces the public placeholder only

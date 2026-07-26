@@ -1,7 +1,11 @@
 #!/bin/sh
 set -eu
 
-fixture_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+fixture_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+
+if [ -n "${HOME:-}" ] || [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+    : >"$fixture_dir/inherited-environment"
+fi
 
 if [ -f "$fixture_dir/outage" ]; then
     exit 70

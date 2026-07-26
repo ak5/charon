@@ -217,11 +217,11 @@ async fn proxy(tls: TlsConfig) -> Result<std::net::SocketAddr> {
             header: "authorization".into(),
             placeholder: "Bearer charon-placeholder".into(),
             value_template: "Bearer {secret}".into(),
-            secret_ref: "allowed-token".into(),
+            secret_ref: "CHARON_ALLOWED_TOKEN".into(),
         }],
     };
     let provider = StaticProvider(HashMap::from([(
-        "allowed-token".into(),
+        "CHARON_ALLOWED_TOKEN".into(),
         "fixture-secret".into(),
     )]));
     let state = Arc::new(AppState::new(config, Arc::new(provider))?);
