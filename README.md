@@ -1,5 +1,13 @@
 # Charon
 
+<p align="center">
+  <img
+    src="https://github.com/ak5/charon/releases/download/readme-assets/charon.jpg"
+    alt="Charon ferrying souls across the river Styx"
+    width="900"
+  >
+</p>
+
 Charon is a forward proxy that adds credentials to approved outbound requests.
 It lets a workload call an API without putting the API credential in that
 workload's environment, filesystem, or container image.
