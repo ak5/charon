@@ -33,6 +33,6 @@ run = "cargo test --all-targets --all-features"
 description = "Check dependency advisories, licenses, bans, and sources"
 run = "cargo deny check"
 
-[tasks.run]
-description = "Run Charon with the example development policy"
-run = "cargo run -- --config examples/charon.toml"
+[tasks.dev]
+description = "Run Charon with the local development policy"
+run = "cargo run -- --config examples/charon.dev.toml"
