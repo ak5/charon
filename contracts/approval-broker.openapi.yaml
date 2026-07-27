@@ -1,0 +1,299 @@
+openapi: 3.1.0
+info:
+  title: Charon approval broker control-plane API
+  version: 1.0.0
+  description: >
+    Authenticated issuer and operator API for normalized human approval
+    requests, signed approval assertions, and bounded reusable rules. This API
+    is external to Charon's credential data plane.
+servers:
+  - url: https://approval-broker.invalid
+    description: Operator-configured private endpoint
+security:
+  - mutualTLS: []
+paths:
+  /v1/approval-requests:
+    post:
+      operationId: createApprovalRequest
+      summary: Submit one normalized approval request
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "./approval-request.schema.json"
+      responses:
+        "202":
+          description: Request accepted for rule evaluation or human delivery
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalReceipt"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Idempotency key was already bound to different content
+        "429":
+          description: Prompt or issuer rate limit exceeded
+  /v1/approval-requests/{request_id}:
+    get:
+      operationId: getApprovalRequest
+      summary: Read terminal or pending state without presentation secrets
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "200":
+          description: Current approval state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalState"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: cancelApprovalRequest
+      summary: Cancel a still-pending request
+      parameters:
+        - $ref: "#/components/parameters/RequestId"
+      responses:
+        "204":
+          description: Pending request moved to a terminal cancelled state
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Request was already terminal
+  /v1/approval-rules:
+    get:
+      operationId: listApprovalRules
+      summary: List redacted rules visible to the authenticated operator
+      parameters:
+        - name: tenant
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Identifier"
+        - name: persona
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/Identifier"
+      responses:
+        "200":
+          description: Matching structured rules
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [rules]
+                properties:
+                  rules:
+                    type: array
+                    maxItems: 100
+                    items:
+                      $ref: "./approval-rule.schema.json"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/approval-rules/{rule_id}:
+    get:
+      operationId: getApprovalRule
+      summary: Read one structured reusable rule
+      parameters:
+        - $ref: "#/components/parameters/RuleId"
+      responses:
+        "200":
+          description: Structured rule
+          content:
+            application/json:
+              schema:
+                $ref: "./approval-rule.schema.json"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: revokeApprovalRule
+      summary: Idempotently revoke one reusable rule
+      parameters:
+        - $ref: "#/components/parameters/RuleId"
+      responses:
+        "204":
+          description: Rule is revoked or was already revoked
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/emergency-disable:
+    put:
+      operationId: setEmergencyDisable
+      summary: Enable or clear fail-closed assertion issuance disablement
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [disabled, generation]
+              properties:
+                disabled:
+                  type: boolean
+                generation:
+                  type: integer
+                  minimum: 1
+      responses:
+        "204":
+          description: Emergency state updated monotonically
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: Generation is stale
+components:
+  securitySchemes:
+    mutualTLS:
+      type: mutualTLS
+      description: Operator-managed issuer or administrator client identity
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._-]+$"
+    RequestId:
+      name: request_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Nonce"
+    RuleId:
+      name: rule_id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/Nonce"
+  schemas:
+    Identifier:
+      type: string
+      minLength: 1
+      maxLength: 128
+      pattern: "^[A-Za-z0-9._-]+$"
+    Nonce:
+      type: string
+      minLength: 16
+      maxLength: 128
+      pattern: "^[A-Za-z0-9._-]+$"
+    Digest:
+      type: string
+      pattern: "^sha256:[0-9a-f]{64}$"
+    ApprovalReceipt:
+      type: object
+      additionalProperties: false
+      required: [request_id, request_digest, state, expires_at]
+      properties:
+        request_id:
+          $ref: "#/components/schemas/Nonce"
+        request_digest:
+          $ref: "#/components/schemas/Digest"
+        state:
+          type: string
+          enum: [pending, allowed_by_rule, denied_by_policy]
+        expires_at:
+          type: integer
+          minimum: 0
+    ApprovalState:
+      type: object
+      additionalProperties: false
+      required: [request_id, request_digest, state, expires_at]
+      properties:
+        request_id:
+          $ref: "#/components/schemas/Nonce"
+        request_digest:
+          $ref: "#/components/schemas/Digest"
+        state:
+          type: string
+          enum:
+            - pending
+            - allowed
+            - denied
+            - timed_out
+            - cancelled
+        expires_at:
+          type: integer
+          minimum: 0
+        decision:
+          $ref: "./approval-decision.schema.json"
+        assertion:
+          type: string
+          description: >
+            Compact signed approval assertion returned only for an allowed
+            terminal state.
+          minLength: 32
+          maxLength: 8192
+      allOf:
+        - if:
+            properties:
+              state:
+                const: allowed
+          then:
+            required: [decision, assertion]
+        - if:
+            properties:
+              state:
+                enum: [pending, denied, timed_out, cancelled]
+          then:
+            not:
+              required: [assertion]
+    Problem:
+      type: object
+      additionalProperties: false
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+          maxLength: 128
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+  responses:
+    InvalidRequest:
+      description: Request is malformed, expired, or digest validation failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthenticated:
+      description: Issuer or operator client identity is missing or invalid
+    Forbidden:
+      description: Authenticated client does not own the requested scope
+    NotFound:
+      description: Object is absent or not visible to this authenticated client

@@ -10,6 +10,8 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | --- | --- | --- | --- | --- |
 | Workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, placeholder, size, redirect, replay, and expiry enforcement |
 | Identity issuer | control plane → workload → Charon | Ed25519 signed compact manifest; [`workload-claims.schema.json`](../contracts/workload-claims.schema.json) | trusted only to assert identity and capability | offline signature verification and independent concrete-operation policy |
+| Approval broker | control plane ↔ broker → identity issuer | normalized request and signed approval assertion; [`approval-broker.openapi.yaml`](../contracts/approval-broker.openapi.yaml) | trusted control-plane authorization component | outside Charon; cannot select destinations, secrets, or widen local policy |
+| Approval channel | broker ↔ Telegram/human | [`ApprovalChannel`](../contracts/approval-channel.md) presentation and opaque callback contract | trusted only for delivery and numeric actor/chat authentication | outside Charon; no decision, rule, assertion, or credential authority |
 | Operator configuration | operator → Charon | deny-unknown-fields TOML; example in [`examples/charon.toml`](../examples/charon.toml) | trusted administrative input | validation before listener bind |
 | Secret provider | Charon → provider adapter | Rust `SecretProvider`; opaque policy-owned reference in, `SecretString` out, closed `ProviderError` failures | trusted with only its realm's secrets | readiness, bounded caching, non-disclosure, fail-closed errors |
 | Realm reconciler | operator → runtime | declarative desired/observed objects; schemas in [`contracts/`](../contracts/) | privileged control plane | no lifecycle mutation API; only runtime health and identity |
@@ -45,6 +47,21 @@ Any system may be an issuer if it:
 Charon keeps only the public key and does not call the issuer. Issuer
 availability therefore affects creation of new manifests, not verification of
 an already issued request.
+
+## Human approval contract
+
+When an operation requires human approval, the control plane submits a
+schema-validated normalized request to the external approval broker. The broker
+either atomically matches one bounded reusable rule or obtains a terminal human
+decision through an `ApprovalChannel`, then returns a short-lived signed
+approval assertion to the identity issuer.
+
+The issuer verifies and consumes that assertion, rechecks the current
+tenant/persona/workspace/lease tuple and policy generation, and mints one fresh
+single-use Charon manifest. Charon never calls the broker or Telegram and never
+receives approval requests, decisions, rules, assertions, callback tokens, bot
+tokens, or presentation text. ADR 0005 and the approval artifacts in
+[`contracts/`](../contracts/) define this separate control-plane boundary.
 
 ## Provider adapter contract
 

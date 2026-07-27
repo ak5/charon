@@ -1,0 +1,31 @@
+{
+  "api_version": "charon.approval/v1",
+  "request": {
+    "request_id": "request-0123456789abcdef",
+    "issuer": "https://issuer.example.invalid",
+    "tenant": "tenant-example",
+    "persona": "developer",
+    "workspace": "workspace-123",
+    "lease": "lease-456",
+    "workload": "release-agent",
+    "operation": "operation-789",
+    "capability": "github-issues",
+    "service": "github",
+    "resource": {
+      "kind": "github_repository",
+      "owner": "example",
+      "name": "widgets"
+    },
+    "action": "github.issue.close",
+    "command": {
+      "program": "gh",
+      "arguments": ["issue", "close", "456", "--repo", "example/widgets"]
+    },
+    "risk_tier": "medium",
+    "policy_generation": 7,
+    "requested_manifest_ttl_seconds": 60,
+    "created_at": 1785196800,
+    "expires_at": 1785196920
+  },
+  "request_digest": "sha256:51a68a4e2188bd3021d4aef08e20d66976346087c14232ae1dd4ac8953c2abb5"
+}

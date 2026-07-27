@@ -1,0 +1,147 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:approval-rule:v1",
+  "title": "Bounded reusable human approval rule",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "rule_id",
+    "kind",
+    "tenant",
+    "persona",
+    "workload",
+    "service",
+    "resource",
+    "actions",
+    "risk_tiers",
+    "policy_generation",
+    "max_manifest_ttl_seconds",
+    "max_uses",
+    "created_at",
+    "expires_at",
+    "created_from_decision"
+  ],
+  "properties": {
+    "api_version": { "const": "charon.approval/v1" },
+    "rule_id": { "$ref": "#/$defs/nonce" },
+    "kind": {
+      "type": "string",
+      "enum": ["session", "exact_operation", "operation_class"]
+    },
+    "tenant": { "$ref": "#/$defs/identifier" },
+    "persona": { "$ref": "#/$defs/identifier" },
+    "workspace": { "$ref": "#/$defs/identifier" },
+    "lease": { "$ref": "#/$defs/identifier" },
+    "workload": { "$ref": "#/$defs/identifier" },
+    "service": { "$ref": "#/$defs/identifier" },
+    "resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "owner", "name"],
+      "properties": {
+        "kind": { "const": "github_repository" },
+        "owner": { "$ref": "#/$defs/resourceIdentifier" },
+        "name": { "$ref": "#/$defs/resourceIdentifier" }
+      }
+    },
+    "actions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/action" }
+    },
+    "command_digest": { "$ref": "#/$defs/digest" },
+    "risk_tiers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["low", "medium", "high"]
+      }
+    },
+    "policy_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_manifest_ttl_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300
+    },
+    "max_uses": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "inactivity_timeout_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 86400
+    },
+    "created_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" },
+    "created_from_decision": { "$ref": "#/$defs/nonce" },
+    "revoked_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "session" } } },
+      "then": {
+        "required": ["workspace", "lease", "inactivity_timeout_seconds"]
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "exact_operation" } } },
+      "then": {
+        "required": ["command_digest"],
+        "properties": {
+          "actions": { "maxItems": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "operation_class" } } },
+      "then": {
+        "not": { "required": ["command_digest"] }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "resourceIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_-]*)+$"
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -108,3 +108,7 @@ reconciler contract are in
 [`docs/persona-realm-contract.md`](docs/persona-realm-contract.md).
 The secret-store extension contract and its fail-closed constraints are in
 [`ADR 0004`](docs/adr/0004-secret-provider-adapters.md).
+The optional external human-approval broker and channel adapter are specified
+by [`ADR 0005`](docs/adr/0005-human-approval-broker.md) and the
+[`approval contracts`](contracts/README.md); Charon has no Telegram dependency
+or online approval lookup.

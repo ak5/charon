@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:approval-request:v1",
+  "title": "Normalized human approval request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_version", "request", "request_digest"],
+  "properties": {
+    "api_version": { "const": "charon.approval/v1" },
+    "request": { "$ref": "#/$defs/request" },
+    "request_digest": { "$ref": "#/$defs/digest" }
+  },
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "issuer",
+        "tenant",
+        "persona",
+        "workspace",
+        "lease",
+        "workload",
+        "operation",
+        "capability",
+        "service",
+        "resource",
+        "action",
+        "command",
+        "risk_tier",
+        "policy_generation",
+        "requested_manifest_ttl_seconds",
+        "created_at",
+        "expires_at"
+      ],
+      "properties": {
+        "request_id": { "$ref": "#/$defs/nonce" },
+        "issuer": { "$ref": "#/$defs/issuer" },
+        "tenant": { "$ref": "#/$defs/identifier" },
+        "persona": { "$ref": "#/$defs/identifier" },
+        "workspace": { "$ref": "#/$defs/identifier" },
+        "lease": { "$ref": "#/$defs/identifier" },
+        "workload": { "$ref": "#/$defs/identifier" },
+        "operation": { "$ref": "#/$defs/identifier" },
+        "capability": { "$ref": "#/$defs/identifier" },
+        "service": { "$ref": "#/$defs/identifier" },
+        "resource": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "owner", "name"],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": ["github_repository"]
+            },
+            "owner": { "$ref": "#/$defs/resourceIdentifier" },
+            "name": { "$ref": "#/$defs/resourceIdentifier" }
+          }
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_-]*)+$"
+        },
+        "command": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["program", "arguments"],
+          "properties": {
+            "program": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9._+-]+$"
+            },
+            "arguments": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+              }
+            }
+          }
+        },
+        "risk_tier": {
+          "type": "string",
+          "enum": ["low", "medium", "high", "critical"]
+        },
+        "policy_generation": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "requested_manifest_ttl_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "resourceIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
