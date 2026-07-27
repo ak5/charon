@@ -4,6 +4,7 @@ use std::{collections::BTreeSet, fs, path::Path};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
+use sha2::{Digest as _, Sha256};
 
 #[test]
 fn json_contracts_are_valid_and_closed() -> Result<()> {
@@ -11,6 +12,10 @@ fn json_contracts_are_valid_and_closed() -> Result<()> {
         "contracts/workload-claims.schema.json",
         "contracts/realm-desired.schema.json",
         "contracts/realm-observation.schema.json",
+        "contracts/approval-request.schema.json",
+        "contracts/approval-decision.schema.json",
+        "contracts/approval-rule.schema.json",
+        "contracts/approval-assertion.schema.json",
     ] {
         let document: Value = serde_json::from_str(
             &fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?,
@@ -29,6 +34,45 @@ fn json_contracts_are_valid_and_closed() -> Result<()> {
             bail!("{path} must reject unknown top-level properties");
         }
     }
+    Ok(())
+}
+
+#[test]
+fn approval_request_digest_vector_is_stable() -> Result<()> {
+    let document: Value = serde_json::from_str(&fs::read_to_string(
+        "contracts/examples/approval-request.json",
+    )?)?;
+    let request = document
+        .get("request")
+        .context("approval request example has no normalized request")?;
+    let canonical = serde_json::to_vec(request)?;
+    let digest = format!("sha256:{:x}", Sha256::digest(canonical));
+    assert_eq!(
+        document.get("request_digest").and_then(Value::as_str),
+        Some(digest.as_str())
+    );
+    Ok(())
+}
+
+#[test]
+fn approval_broker_contract_is_external_and_closed() -> Result<()> {
+    let contract = fs::read_to_string("contracts/approval-broker.openapi.yaml")?;
+    assert!(contract.starts_with("openapi: 3.1.0\n"));
+    for required in [
+        "mutualTLS:",
+        "/v1/approval-requests:",
+        "/v1/approval-rules:",
+        "/v1/emergency-disable:",
+        "./approval-request.schema.json",
+        "./approval-decision.schema.json",
+        "./approval-rule.schema.json",
+    ] {
+        if !contract.contains(required) {
+            bail!("approval broker OpenAPI is missing {required:?}");
+        }
+    }
+    assert!(!contract.contains("/healthz:"));
+    assert!(!contract.contains("Proxy-Authorization"));
     Ok(())
 }
 
