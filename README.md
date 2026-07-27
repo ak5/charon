@@ -1,114 +1,196 @@
 # Charon
 
-Charon is a persona-aware credential injection proxy for secretless workloads.
-An untrusted developer container sends a public placeholder credential; Charon
-authorizes the destination, resolves the real credential outside the container,
-injects it into the upstream request, and emits a redacted audit event.
+Charon is a forward proxy that adds credentials to approved outbound requests.
+It lets a workload call an API without putting the API credential in that
+workload's environment, filesystem, or container image.
+
+The workload sends a harmless placeholder instead of a real credential. Charon
+checks a short-lived signed authorization, matches the request against local
+policy, obtains the credential from the configured secret store, and replaces
+the placeholder only in the request sent upstream.
 
 ```text
-developer workload (no real secrets)
-  -> Charon (policy + credential injection)
-      -> configured egress (optional Squid)
-          -> GitHub / vendor API
+workload                         Charon                     API
+no stored credential  ──▶  verify + apply policy  ──▶  authenticated request
+placeholder only            resolve credential
 ```
 
-## Status
+Charon is an early-stage project. Its core proxy, authorization, HTTPS
+interception, provider adapter, and tests are implemented. The deployment and
+integration contracts are still being refined before a production release.
 
-Milestone 0 is an intentionally constrained proxy proof:
+## Why use it?
 
-- exact-host allowlisting;
-- exact placeholder replacement;
-- provider abstraction with environment and locked-by-default Vaultwarden
-  implementations;
-- optional upstream HTTP proxy with protected file-backed authentication;
-- backpressured request and response streaming with independent 16 MiB limits;
-- HTTPS `CONNECT` interception with HTTP/2 and HTTP/1.1 ALPN;
-- redirects disabled;
-- JSON audit events without headers or bodies;
-- fail-closed tests.
+Tools often need credentials for services such as GitHub, package registries,
+or internal APIs. Giving every tool a long-lived token makes that token
+available to the tool and to anything that compromises it.
 
-HTTPS `CONNECT` interception, signed workload identity, and the Vaultwarden
-provider are implemented but not yet selected by the milestone-0 deployment.
-The owner CONNECT security review and disposable secretless `gh api user`
-vertical proof are complete. See [`docs/threat-model.md`](docs/threat-model.md).
+Charon moves the credential into a smaller, separately operated process. A
+request is allowed only when all of these agree:
 
-## When Charon resolves a credential
+- a signed, short-lived, single-use workload manifest;
+- a named capability in Charon's configuration; and
+- the actual destination hostname, HTTP method, and path.
 
-An HTTP request alone cannot select or retrieve a credential. Before resolution,
-Charon verifies a signed, short-lived, single-use workload manifest and binds it
-to the configured issuer, audience, realm tenant/persona, workspace, active
-lease, workload, operation correlation, and named capability. It
-then requires the policy's exact destination hostname, method, path, and public
-placeholder. For HTTPS, the CONNECT hostname, TLS SNI, and decrypted request
-authority must also agree.
+The workload cannot choose a secret, a secret-store item, or an unconfigured
+destination. Charon does not return credentials to workloads and does not
+follow redirects after adding one.
 
-Remote credential-bearing requests require HTTPS on port 443. Plaintext HTTP
-is accepted only for literal loopback addresses used by local fixtures.
+## Concepts
 
-The capability persona maps to a caller-independent credential reference; the
-Vaultwarden provider maps that reference and persona to one exact configured
-item UUID. After every check passes, Charon replaces the public placeholder only
-in the outbound request to the destination. It never returns the resolved value
-to the workload, and it never follows redirects with an injected credential.
+These names appear in the configuration and protocol:
 
-The Vaultwarden account is itself a trust boundary: production runs one isolated
-Charon realm and least-privilege account per persona. Every mapping and
-capability must match the realm's declared persona. Do not connect Charon to a
-personal, broadly privileged, or cross-persona vault. See
-the complete invariants and residual risks in
-[`docs/threat-model.md`](docs/threat-model.md).
+| Term | Meaning |
+| --- | --- |
+| **Workload** | The program making the outbound request, such as a CLI, agent, build, or development container. |
+| **Manifest** | A short-lived, signed authorization carried with one request. It identifies the workload and names one capability. Each manifest can be used once. |
+| **Capability** | A named permission in Charon's local policy, for example “read the current GitHub user.” It maps to one service and an exact set of methods and paths. |
+| **Service** | A configured destination and credential-injection rule: exact hostnames, the credential header, its placeholder, and a secret reference. |
+| **Secret provider** | The adapter Charon uses to obtain a credential. The current implementations are an environment provider for disposable development and a Vaultwarden provider. |
+| **Realm** | One isolated Charon instance and its configuration, provider session, and policy. A realm serves one tenant and one persona. |
+| **Tenant** | The organization or administrative owner of a realm. |
+| **Persona** | The stable human or automation identity whose credentials the realm may use, such as `alice`, `release-bot`, or `github-readonly`. It is a credential-isolation label, not a role-playing concept. |
+| **Workspace** | The project or working environment that received the manifest. |
+| **Lease** | The current authorized lifetime or assignment of that workspace. Replacing the lease invalidates authorizations tied to the old assignment. |
+
+Tenant, persona, workspace, and lease are asserted by the manifest issuer and
+checked against the realm. They give an integrating system enough identity
+context to distinguish, for example, Alice's project from a release bot without
+letting either select credentials directly.
+
+## How a request works
+
+1. A trusted issuer gives the workload a signed manifest for a named
+   capability.
+2. The workload sends a normal proxy request to Charon with
+   `Proxy-Authorization: Charon <manifest>` and the configured public
+   placeholder in the credential header.
+3. Charon verifies the signature, expiry, realm identity, and single-use nonce.
+4. Charon resolves the capability from its own configuration and checks the
+   request's exact host, method, and path.
+5. Charon asks its configured provider for the policy-owned secret reference.
+6. Charon replaces the placeholder in the upstream request and returns the
+   API's response.
+
+For HTTPS, the workload connects through Charon using HTTP `CONNECT` and trusts
+the operator-provided Charon CA. The
+[forward-proxy contract](contracts/forward-proxy.md) specifies the complete wire
+protocol. Charon's ordinary health endpoints are described by
+[OpenAPI](contracts/openapi.yaml).
 
 ## Development
 
-[mise](https://mise.jdx.dev/) pins Rust 1.97.1. Rust 2024 implies Cargo's
-Rust-version-aware resolver, and `rust-version` documents the supported compiler.
+The project requires Rust 1.97 or newer. [mise](https://mise.jdx.dev/) is
+optional; it installs the pinned toolchain and provides short names for common
+development commands.
 
 ```sh
 mise install
 mise run check
 ```
 
-CI uses GitHub-hosted Linux runners so forks work without repository
-configuration. Dependabot targets `dev`; release pull requests alone flow from
-`dev` to protected `main`.
-
-Run the development service with a disposable test token in Charon's process:
+`mise run <task>` means “run a task defined in `mise.toml`.” For example,
+`mise run dev` runs the task named `dev`:
 
 ```sh
-export CHARON_GITHUB_TOKEN=test-only
-mise run run
+mise run dev
 ```
 
-Use real credentials only in the reviewed disposable vertical fixture. The
-milestone-0 deployment remains limited to its disposable environment credential
-until the documented Vaultwarden cutover is provisioned.
+That command is equivalent to:
 
-The immutable non-production release, verification, rollback, and removal
-contract is documented in [`docs/deployment.md`](docs/deployment.md).
-The internal-network, secretless `gh api user` integration fixture is documented
-in [`integration/vertical/README.md`](integration/vertical/README.md).
+```sh
+cargo run -- --config examples/charon.dev.toml
+```
 
-## Integration ownership
+The development configuration listens only on `127.0.0.1:3129`, uses the
+environment provider, and contains no real credential. It is suitable for
+starting the process and inspecting its health endpoints; exercising an
+authenticated proxy request also requires issuing a valid test manifest.
 
-- This repository owns the generic Rust binary, container image, policy format,
-  tests, and security documentation.
-- The operator owns listeners, network policy, secret-store connectivity,
-  backups, deployment, and the external realm reconciler.
-- The integrating control plane owns tenant/persona/workspace lifecycle and
-  issues short-lived signed workload manifests.
-- Charon never calls either system on its request path.
+Run the individual checks directly if you do not use mise:
 
-The integration boundaries are indexed in
-[`docs/integration-boundaries.md`](docs/integration-boundaries.md).
-Machine-readable schemas and the normative
-[`forward-proxy protocol`](contracts/forward-proxy.md) live in
-[`contracts/`](contracts/). The production persona-realm boundary and external
-reconciler contract are in
-[`ADR 0003`](docs/adr/0003-persona-realms.md) and
-[`docs/persona-realm-contract.md`](docs/persona-realm-contract.md).
-The secret-store extension contract and its fail-closed constraints are in
-[`ADR 0004`](docs/adr/0004-secret-provider-adapters.md).
-The optional external human-approval broker and channel adapter are specified
-by [`ADR 0005`](docs/adr/0005-human-approval-broker.md) and the
-[`approval contracts`](contracts/README.md); Charon has no Telegram dependency
-or online approval lookup.
+```sh
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-targets --all-features
+cargo deny check
+```
+
+## Configuration
+
+[`examples/charon.dev.toml`](examples/charon.dev.toml) is a minimal local
+configuration. [`examples/charon.toml`](examples/charon.toml) shows the
+Vaultwarden, TLS, identity, capability, and service settings used in an
+operator-managed deployment.
+
+Configuration is deny-by-default:
+
+- destination hosts are exact names; wildcards are not supported;
+- capabilities list exact HTTP methods and paths;
+- remote destinations require HTTPS on port 443;
+- redirects are disabled;
+- request and response bodies have independent size limits; and
+- unknown configuration fields are rejected.
+
+### Secret-store adapters
+
+Secret stores sit behind the Rust `SecretProvider` interface. An adapter
+receives an opaque reference chosen by local policy and returns a
+`SecretString`; callers never choose a backend item.
+
+The binary currently includes:
+
+- `environment`, intended only for disposable local development; and
+- `vaultwarden`, using an isolated Bitwarden CLI session and exact item UUID
+  mappings.
+
+More backends can be added without changing the workload protocol. Providers
+are compiled into the binary and selected by trusted realm configuration;
+Charon does not load credential-handling plugins dynamically or fall back to a
+different provider during an outage. The extension rules are documented in
+[ADR 0004](docs/adr/0004-secret-provider-adapters.md).
+
+## Project boundaries
+
+Charon owns the request-time data path: manifest verification, local policy,
+credential lookup, injection, proxying, and redacted audit events.
+
+It does not own:
+
+- user, workspace, or lease management;
+- issuance of workload manifests;
+- secret-store provisioning and backup;
+- deployment or network policy; or
+- human-approval workflows.
+
+Those systems integrate through signed data and versioned contracts; Charon
+does not query an application's database on the request path. See the
+[integration boundary map](docs/integration-boundaries.md) and
+[machine-readable contracts](contracts/README.md).
+
+## Security
+
+Charon handles credentials, so changes to authorization, proxying, provider
+adapters, TLS, or logging deserve careful review. Please read
+[`SECURITY.md`](SECURITY.md) before reporting a vulnerability and see the
+[threat model](docs/threat-model.md) for the detailed guarantees, assumptions,
+and remaining risks.
+
+The full local quality gate is:
+
+```sh
+mise run check
+```
+
+## Documentation
+
+- [Forward-proxy protocol](contracts/forward-proxy.md)
+- [Configuration and integration boundaries](docs/integration-boundaries.md)
+- [Threat model](docs/threat-model.md)
+- [Deployment guide](docs/deployment.md)
+- [Architecture decisions](docs/adr/)
+- [Human-approval contracts](contracts/README.md)
+
+## License
+
+Charon is licensed under the [Apache License 2.0](LICENSE).

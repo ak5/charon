@@ -1,0 +1,35 @@
+# Local startup configuration. This file contains no real credentials and does
+# not configure HTTPS interception. See charon.toml for the operator example.
+listen = "127.0.0.1:3129"
+
+[realm]
+id = "local-development"
+tenant = "example"
+persona = "developer"
+generation = 1
+
+[provider]
+kind = "environment"
+
+[identity]
+issuer = "example-control-plane"
+audience = "charon"
+# Public test key only. The matching private key is not part of this example.
+public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+max_ttl_seconds = 60
+clock_skew_seconds = 2
+
+[[capabilities]]
+name = "local-demo"
+persona = "developer"
+service = "local-api"
+methods = ["GET"]
+paths = ["/demo"]
+
+[[services]]
+name = "local-api"
+hosts = ["127.0.0.1"]
+header = "authorization"
+placeholder = "Bearer charon-placeholder"
+value_template = "Bearer {secret}"
+secret_ref = "CHARON_DEMO_TOKEN"
