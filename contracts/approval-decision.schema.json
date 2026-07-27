@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:approval-decision:v1",
+  "title": "Human approval decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "api_version",
+    "decision_id",
+    "request_id",
+    "request_digest",
+    "outcome",
+    "grant",
+    "actor",
+    "decided_at",
+    "expires_at"
+  ],
+  "properties": {
+    "api_version": { "const": "charon.approval/v1" },
+    "decision_id": { "$ref": "#/$defs/nonce" },
+    "request_id": { "$ref": "#/$defs/nonce" },
+    "request_digest": { "$ref": "#/$defs/digest" },
+    "outcome": {
+      "type": "string",
+      "enum": ["deny", "allow"]
+    },
+    "grant": {
+      "type": "string",
+      "enum": ["none", "once", "session", "exact_operation", "operation_class"]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["channel", "user_id", "chat_id"],
+      "properties": {
+        "channel": { "const": "telegram" },
+        "user_id": { "$ref": "#/$defs/numericIdentifier" },
+        "chat_id": { "$ref": "#/$defs/signedNumericIdentifier" }
+      }
+    },
+    "rule_id": { "$ref": "#/$defs/nonce" },
+    "decided_at": { "$ref": "#/$defs/timestamp" },
+    "expires_at": { "$ref": "#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "outcome": { "const": "deny" } } },
+      "then": {
+        "properties": { "grant": { "const": "none" } },
+        "not": { "required": ["rule_id"] }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "allow" } } },
+      "then": {
+        "properties": {
+          "grant": {
+            "enum": ["once", "session", "exact_operation", "operation_class"]
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "grant": { "const": "once" } } },
+      "then": {
+        "not": { "required": ["rule_id"] }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "grant": {
+            "enum": ["session", "exact_operation", "operation_class"]
+          }
+        }
+      },
+      "then": { "required": ["rule_id"] }
+    }
+  ],
+  "$defs": {
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "numericIdentifier": {
+      "type": "string",
+      "pattern": "^[0-9]{1,20}$"
+    },
+    "signedNumericIdentifier": {
+      "type": "string",
+      "pattern": "^-?[0-9]{1,20}$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

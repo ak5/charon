@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:charon:approval-assertion:v1",
+  "title": "Approval assertion claims",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "iss",
+    "aud",
+    "sub",
+    "request_id",
+    "request_digest",
+    "decision_id",
+    "grant",
+    "tenant",
+    "persona",
+    "workspace",
+    "lease",
+    "workload",
+    "operation",
+    "capability",
+    "service",
+    "resource_digest",
+    "action",
+    "policy_generation",
+    "max_manifest_ttl_seconds",
+    "jti",
+    "iat",
+    "nbf",
+    "exp"
+  ],
+  "properties": {
+    "iss": { "$ref": "#/$defs/issuer" },
+    "aud": { "$ref": "#/$defs/issuer" },
+    "sub": { "$ref": "#/$defs/identifier" },
+    "request_id": { "$ref": "#/$defs/nonce" },
+    "request_digest": { "$ref": "#/$defs/digest" },
+    "decision_id": { "$ref": "#/$defs/nonce" },
+    "grant": {
+      "type": "string",
+      "enum": ["once", "session", "exact_operation", "operation_class"]
+    },
+    "rule_id": { "$ref": "#/$defs/nonce" },
+    "tenant": { "$ref": "#/$defs/identifier" },
+    "persona": { "$ref": "#/$defs/identifier" },
+    "workspace": { "$ref": "#/$defs/identifier" },
+    "lease": { "$ref": "#/$defs/identifier" },
+    "workload": { "$ref": "#/$defs/identifier" },
+    "operation": { "$ref": "#/$defs/identifier" },
+    "capability": { "$ref": "#/$defs/identifier" },
+    "service": { "$ref": "#/$defs/identifier" },
+    "resource_digest": { "$ref": "#/$defs/digest" },
+    "action": { "$ref": "#/$defs/action" },
+    "command_digest": { "$ref": "#/$defs/digest" },
+    "policy_generation": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "max_manifest_ttl_seconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 300
+    },
+    "jti": { "$ref": "#/$defs/nonce" },
+    "iat": { "$ref": "#/$defs/timestamp" },
+    "nbf": { "$ref": "#/$defs/timestamp" },
+    "exp": { "$ref": "#/$defs/timestamp" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "grant": { "const": "once" } } },
+      "then": {
+        "required": ["command_digest"],
+        "not": { "required": ["rule_id"] }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "grant": {
+            "enum": ["session", "exact_operation", "operation_class"]
+          }
+        }
+      },
+      "then": { "required": ["rule_id"] }
+    },
+    {
+      "if": { "properties": { "grant": { "const": "exact_operation" } } },
+      "then": { "required": ["command_digest"] }
+    },
+    {
+      "if": { "properties": { "grant": { "const": "operation_class" } } },
+      "then": {
+        "not": { "required": ["command_digest"] }
+      }
+    }
+  ],
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "action": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9_-]*)+$"
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

@@ -24,6 +24,13 @@ capability without placing the underlying credential in that workload.
 - **Workload identity issuer:** an integrating control plane owns an Ed25519
   private signing key and issues short-lived, single-use manifests. Charon owns
   only the public key and never queries control-plane state from the data plane.
+- **Human approval broker:** optional external control-plane component that
+  validates normalized requests, persists bounded rules and terminal decisions,
+  authenticates approval-channel events, and signs short-lived assertions for
+  the workload identity issuer. Charon never calls it.
+- **Approval channel and human:** Telegram is the first presentation adapter.
+  Numeric user/chat allowlists authenticate the human boundary; usernames and
+  display text do not. The channel cannot create rules or assertions.
 - **Persona realm:** one Charon process/container, Vaultwarden identity/session,
   configuration, cache, listener, runtime filesystem, and delegated
   intermediate CA per control-plane persona. No realm can read another realm's
@@ -118,6 +125,16 @@ capability without placing the underlying credential in that workload.
     item identifiers, policy references, and response bodies cannot cross the
     adapter boundary. Each realm selects exactly one adapter instance; there is
     no automatic fallback.
+26. Human approval is resolved before manifest issuance by an external broker.
+    Assertions bind the normalized request digest, active lease, resource,
+    action, risk tier, policy generation, and TTL bound. The issuer consumes
+    each assertion and mints a new single-use manifest; Charon never performs an
+    online approval lookup.
+27. Reusable approvals are structured, expiring, use-bounded, revocable, and
+    cannot contain wildcards or natural-language predicates. Critical and
+    unknown operations cannot receive reusable approval. Telegram callbacks are
+    opaque, random, single-use, expiring, and bound server-side to one pending
+    request and numeric allowlisted actor/chat.
 
 ## Known milestone-0 limitations
 
@@ -142,3 +159,8 @@ capability without placing the underlying credential in that workload.
   dependencies. Runtime validates CLI path/type/permissions but does not
   independently attest the executable digest; deployment must pin and verify
   that artifact.
+- The optional approval broker, its durable rule/nonce store, signing key,
+  Telegram bot account, allowlisted human accounts, and identity issuer checks
+  extend the trusted control plane. Telegram outage or account-recovery
+  ambiguity fails closed for new approvals but does not change Charon's
+  credential boundary.
