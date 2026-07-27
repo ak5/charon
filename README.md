@@ -1,6 +1,13 @@
 # Charon
 
 <p align="center">
+  <a href="https://github.com/ak5/charon/actions/workflows/ci.yml"><img src="https://github.com/ak5/charon/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="https://github.com/ak5/charon/pkgs/container/charon"><img src="https://img.shields.io/badge/container-ghcr.io%2Fak5%2Fcharon-blue" alt="Container image"></a>
+  <a href="https://github.com/ak5/charon/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.97%2B-orange" alt="Rust 1.97 or newer"></a>
+  <a href="https://github.com/ak5/charon/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ak5/charon" alt="Apache 2.0 license"></a>
+</p>
+
+<p align="center">
   <img
     src="https://github.com/ak5/charon/releases/download/readme-assets/charon.jpg"
     alt="Charon ferrying souls across the river Styx"
@@ -11,6 +18,11 @@
 Charon is a forward proxy that adds credentials to approved outbound requests.
 It lets a workload call an API without putting the API credential in that
 workload's environment, filesystem, or container image.
+
+AI agents are workloads from Charon's point of view. Charon can give an agent
+narrowly scoped access to an authenticated API without placing the long-lived
+credential inside the agent runtime. The same model works for CLIs, builds,
+development containers, and other programs.
 
 The workload sends a harmless placeholder instead of a real credential. Charon
 checks a short-lived signed authorization, matches the request against local
@@ -50,21 +62,17 @@ These names appear in the configuration and protocol:
 
 | Term | Meaning |
 | --- | --- |
-| **Workload** | The program making the outbound request, such as a CLI, agent, build, or development container. |
+| **Workload** | The program making the outbound request, such as an AI agent, CLI, build, or development container. |
 | **Manifest** | A short-lived, signed authorization carried with one request. It identifies the workload and names one capability. Each manifest can be used once. |
 | **Capability** | A named permission in Charon's local policy, for example “read the current GitHub user.” It maps to one service and an exact set of methods and paths. |
 | **Service** | A configured destination and credential-injection rule: exact hostnames, the credential header, its placeholder, and a secret reference. |
 | **Secret provider** | The adapter Charon uses to obtain a credential. The current implementations are an environment provider for disposable development and a Vaultwarden provider. |
-| **Realm** | One isolated Charon instance and its configuration, provider session, and policy. A realm serves one tenant and one persona. |
-| **Tenant** | The organization or administrative owner of a realm. |
-| **Persona** | The stable human or automation identity whose credentials the realm may use, such as `alice`, `release-bot`, or `github-readonly`. It is a credential-isolation label, not a role-playing concept. |
-| **Workspace** | The project or working environment that received the manifest. |
-| **Lease** | The current authorized lifetime or assignment of that workspace. Replacing the lease invalidates authorizations tied to the old assignment. |
+| **Realm** | One isolated Charon deployment: a process, configuration, secret-provider session, and policy. |
 
-Tenant, persona, workspace, and lease are asserted by the manifest issuer and
-checked against the realm. They give an integrating system enough identity
-context to distinguish, for example, Alice's project from a release bot without
-letting either select credentials directly.
+The current pre-1.0 manifest also carries tenant, persona, workspace, and lease
+identifiers supplied by the issuer. They are integration context, not secret
+selectors or core Charon concepts. This part of the public contract is under
+review before 1.0.
 
 ## How a request works
 
