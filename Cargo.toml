@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 description = "Credential-injecting forward proxy for AI agents and other workloads"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/ak5/charon"
 publish = false
 
