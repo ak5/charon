@@ -4,7 +4,7 @@
   <a href="https://github.com/ak5/charon/actions/workflows/ci.yml"><img src="https://github.com/ak5/charon/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/ak5/charon/pkgs/container/charon"><img src="https://img.shields.io/badge/container-ghcr.io%2Fak5%2Fcharon-blue" alt="Container image"></a>
   <a href="https://github.com/ak5/charon/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.97%2B-orange" alt="Rust 1.97 or newer"></a>
-  <a href="https://github.com/ak5/charon/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ak5/charon" alt="Apache 2.0 license"></a>
+  <a href="https://github.com/ak5/charon/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ak5/charon" alt="MIT license"></a>
 </p>
 
 <p align="center">
@@ -41,9 +41,11 @@ integration contracts are still being refined before a production release.
 
 ## Why use it?
 
-Tools often need credentials for services such as GitHub, package registries,
-or internal APIs. Giving every tool a long-lived token makes that token
-available to the tool and to anything that compromises it.
+AI agents and other software often need authenticated access to external
+services such as email, calendars, cloud platforms, customer-support systems,
+payment providers, or an organization's own APIs. Giving every workload a
+long-lived credential makes that credential available to the workload and to
+anything that compromises it.
 
 Charon moves the credential into a smaller, separately operated process. A
 request is allowed only when all of these agree:
@@ -209,4 +211,4 @@ mise run check
 
 ## License
 
-Charon is licensed under the [Apache License 2.0](LICENSE).
+Charon is licensed under the [MIT License](LICENSE).
