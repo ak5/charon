@@ -202,6 +202,8 @@ mise run check
 
 ## Documentation
 
+- [Documentation index](docs/index.md)
+- [Contributing](CONTRIBUTING.md)
 - [Forward-proxy protocol](contracts/forward-proxy.md)
 - [Configuration and integration boundaries](docs/integration-boundaries.md)
 - [Threat model](docs/threat-model.md)

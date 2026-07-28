@@ -1,0 +1,26 @@
+name: Feature request
+description: Propose a capability or improvement
+title: "feature: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What outcome is difficult or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the externally visible behavior and boundaries.
+    validations:
+      required: true
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Identify affected trust boundaries, credential flows, destinations, or authorization decisions.
+    validations:
+      required: true
