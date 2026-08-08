@@ -16,6 +16,9 @@ fn json_contracts_are_valid_and_closed() -> Result<()> {
         "contracts/approval-decision.schema.json",
         "contracts/approval-rule.schema.json",
         "contracts/approval-assertion.schema.json",
+        "contracts/tool-operation.schema.json",
+        "contracts/tool-admission-decision.schema.json",
+        "contracts/tool-receipt.schema.json",
     ] {
         let document: Value = serde_json::from_str(
             &fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?,
@@ -147,7 +150,7 @@ fn public_sources_are_orchestrator_neutral() -> Result<()> {
         "src",
         "tests",
         "examples",
-        "integration",
+        "integrations",
         "deploy",
         "docs",
         "contracts",

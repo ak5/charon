@@ -21,7 +21,7 @@
   pseudo-authority, and intermediate rotation;
 - `tests/http_proxy.rs`: redirect denial, identity-before-provider ordering,
   streaming, and request/response bounds;
-- `integration/vertical`: an unmodified `gh` client, isolated workload network,
+- `integrations/vertical`: an unmodified `gh` client, isolated workload network,
   provider lock, policy denials, and evidence leakage scans; and
 - the complete `mise run check` quality and dependency-policy gate.
 
@@ -50,4 +50,3 @@ Compromise of a deployed realm intermediate can therefore mint certificates
 trusted by that workload. Exact endpoint reachability, direct-egress denial,
 short-lived leaves, per-realm isolation, protected key custody, and rapid realm
 revocation remain mandatory; PKI does not replace Charon authorization.
-

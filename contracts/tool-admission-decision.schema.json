@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ak5/charon/contracts/tool-admission-decision.schema.json",
+  "title": "Tool admission decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "operation_id", "decision", "reason_code"],
+  "properties": {
+    "version": { "const": 1 },
+    "operation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "decision": { "enum": ["allow", "deny"] },
+    "reason_code": {
+      "enum": [
+        "exact-policy-match",
+        "tool-not-allowed",
+        "classification-not-allowed",
+        "unknown-operation",
+        "invalid-request",
+        "service-unavailable"
+      ]
+    },
+    "authorization_id": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "expires_at": { "type": "integer", "minimum": 0 }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "decision": { "const": "allow" } } },
+      "then": { "required": ["authorization_id", "expires_at"] },
+      "else": {
+        "not": {
+          "anyOf": [
+            { "required": ["authorization_id"] },
+            { "required": ["expires_at"] }
+          ]
+        }
+      }
+    }
+  ]
+}
