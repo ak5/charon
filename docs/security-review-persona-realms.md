@@ -19,7 +19,7 @@
   intermediates chaining to one unchanged workspace root;
 - `tests/vaultwarden_provider.rs`: bounded cache, rotation after restart, lock,
   outage, deletion, and credential-free health behavior;
-- `integration/vertical`: internal-only workload network, direct-egress denial,
+- `integrations/vertical`: internal-only workload network, direct-egress denial,
   locked provider, secretless `gh`, artifact/log scans, and offline-root fixture;
 - ADRs 0001–0003, the threat model, deployment guide, and the external
   reconciler/filesystem contract.

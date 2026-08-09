@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "charon-hermes"
+version = "0.1.0"
+description = "Fail-closed Charon permissions and tool receipts for Hermes Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Alexander Ververis" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.entry-points."hermes_agent.plugins"]
+charon-hermes = "charon_hermes:register"
+
+[project.scripts]
+charon-hermes-admission = "charon_hermes.service:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/charon_hermes"]

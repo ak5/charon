@@ -26,6 +26,14 @@
   accepted by an external reconciler.
 - `realm-observation.schema.json` validates the redacted state an external
   reconciler may report.
+- `tool-operation.schema.json` defines the metadata-only operation submitted by
+  a workload integration for admission.
+- `tool-admission-decision.schema.json` defines the bounded local allow/deny
+  response. It is not a Charon manifest and cannot select a credential.
+- `tool-receipt.schema.json` defines the metadata-only execution result emitted
+  by a workload integration. Raw arguments and outputs are excluded.
+- `tool-integration.md` defines the bounded local transport, digest encoding,
+  single-use admission binding, receipt journal, and failure behavior.
 
 Schemas reject unknown properties. They define data shape, not authorization:
 transport authentication, idempotency, ownership-marker checks, filesystem
@@ -38,3 +46,6 @@ alternatives are recorded in
 [`ADR 0005`](../docs/adr/0005-human-approval-broker.md).
 Provisioning, recovery, rotation, revocation, and emergency procedures are in
 the [`approval broker operator runbook`](../docs/approval-broker-operations.md).
+
+Tool admission and receipt contracts are also implemented outside Charon.
+Their first adapter is [`charon-hermes`](../integrations/hermes/README.md).

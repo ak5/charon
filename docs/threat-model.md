@@ -46,6 +46,11 @@ capability without placing the underlying credential in that workload.
   public workflow uses GitHub-hosted runners, digest-pinned build/runtime bases,
   a commit-SHA image tag, and BuildKit provenance and SBOM attestations. It has
   no deployment-host access or deployment credential.
+- **Workload tool adapter:** optional integration code inside an untrusted agent
+  runtime. It can request local semantic admission and emit metadata-only
+  receipts, but it cannot select a Charon credential, capability, destination,
+  provider, or secret reference. Its observations are not trusted against a
+  compromised workload unless execution moves behind an isolated tool gateway.
 
 ## Security invariants
 
@@ -135,6 +140,14 @@ capability without placing the underlying credential in that workload.
     unknown operations cannot receive reusable approval. Telegram callbacks are
     opaque, random, single-use, expiring, and bound server-side to one pending
     request and numeric allowlisted actor/chat.
+28. Workload tool adapters submit only tool name, classification, argument-key
+    names, identifiers, and a digest of canonical arguments for admission. They
+    exclude raw arguments, commands, credentials, manifests, and provider
+    references. Unknown tools and unavailable admission fail closed.
+29. Tool receipts contain no raw arguments or raw tool output. Receipt export is
+    bounded and asynchronous; its failure cannot weaken Charon authorization.
+    In-process receipts are operational evidence, not independent attestation
+    against a compromised workload.
 
 ## Known milestone-0 limitations
 
@@ -164,3 +177,8 @@ capability without placing the underlying credential in that workload.
   extend the trusted control plane. Telegram outage or account-recovery
   ambiguity fails closed for new approvals but does not change Charon's
   credential boundary.
+- The Hermes integration's exact local admission service does not issue Charon
+  manifests or enforce network isolation. Filesystem-protected Unix sockets
+  provide an operator boundary only when the service runs under an identity the
+  workload cannot impersonate. Its hash-chained journal is tamper-evident, not
+  digitally signed.

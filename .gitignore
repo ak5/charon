@@ -4,5 +4,7 @@
 *.pem
 *.key
 .vertical-runtime/
-integration/vertical/evidence/
+integrations/vertical/evidence/
+__pycache__/
+*.py[cod]
 /tmp/

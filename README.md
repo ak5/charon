@@ -205,6 +205,7 @@ mise run check
 - [Documentation index](docs/index.md)
 - [Contributing](CONTRIBUTING.md)
 - [Forward-proxy protocol](contracts/forward-proxy.md)
+- [Hermes Agent integration](integrations/hermes/README.md)
 - [Configuration and integration boundaries](docs/integration-boundaries.md)
 - [Threat model](docs/threat-model.md)
 - [Deployment guide](docs/deployment.md)

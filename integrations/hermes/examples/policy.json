@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "allowed_tools": [
+    {
+      "name": "read_file",
+      "classifications": ["read"]
+    },
+    {
+      "name": "web_search",
+      "classifications": ["read"]
+    }
+  ]
+}
