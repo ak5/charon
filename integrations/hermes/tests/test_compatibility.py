@@ -88,7 +88,25 @@ class CompatibilityTests(unittest.TestCase):
             if os.environ.get("CHARON_HERMES_REQUIRE_ENTRYPOINT") == "1":
                 self.assertIn("charon-hermes", installed)
             if "charon-hermes" in installed:
-                self.assertEqual(installed["charon-hermes"].path, "charon_hermes:register")
+                self.assertEqual(installed["charon-hermes"].path, "charon_hermes")
+                loaded_manager = plugins.PluginManager()
+                previous_socket = os.environ.get("CHARON_HERMES_ADMISSION_SOCKET")
+                try:
+                    os.environ["CHARON_HERMES_ADMISSION_SOCKET"] = str(source / "missing.sock")
+                    loaded_manager._load_plugin(installed["charon-hermes"])
+                finally:
+                    if previous_socket is None:
+                        os.environ.pop("CHARON_HERMES_ADMISSION_SOCKET", None)
+                    else:
+                        os.environ["CHARON_HERMES_ADMISSION_SOCKET"] = previous_socket
+                loaded = loaded_manager._plugins["charon-hermes"]
+                self.assertTrue(loaded.enabled)
+                self.assertIsNone(loaded.error)
+                self.assertEqual(
+                    set(loaded.hooks_registered),
+                    {"pre_tool_call", "post_tool_call", "on_session_finalize"},
+                )
+                loaded_manager._hooks["pre_tool_call"][0].__self__._exporter.close()
         finally:
             sys.path.remove(str(source))
 
