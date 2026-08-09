@@ -84,10 +84,10 @@ ARG CHARON_HERMES_IMAGE
 FROM ${CHARON_HERMES_IMAGE} AS charon_hermes_artifact
 FROM <pinned-hermes-v2026.8.3-image>
 COPY --from=charon_hermes_artifact \
-  /opt/charon-hermes/wheels/charon_hermes-0.2.0-py3-none-any.whl /tmp/
+  /opt/charon-hermes/wheels/charon_hermes-0.2.1-py3-none-any.whl /tmp/
 RUN python -m pip install --no-deps \
-  /tmp/charon_hermes-0.2.0-py3-none-any.whl \
-  && rm /tmp/charon_hermes-0.2.0-py3-none-any.whl
+  /tmp/charon_hermes-0.2.1-py3-none-any.whl \
+  && rm /tmp/charon_hermes-0.2.1-py3-none-any.whl
 ```
 
 Set `CHARON_HERMES_IMAGE` to the immutable Charon-Hermes tag and registry
