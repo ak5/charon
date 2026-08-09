@@ -33,7 +33,7 @@ zeroize = "1.8"
 
 [dev-dependencies]
 http-body-util = "0.1"
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile = "3.23"
 
 
