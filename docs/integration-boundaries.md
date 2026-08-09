@@ -111,6 +111,13 @@ uses Hermes lifecycle hooks to submit a metadata-only normalized operation to a
 protected local admission service. Missing, malformed, expired, or negative
 admission blocks the Hermes tool call.
 
+The Hermes adapter pins a reviewed upstream version, commit, Telegram tool
+inventory, and browserless deployment profile. It classifies mixed-operation
+tools conservatively without interpreting argument values. Hermes independently
+decides which registry-gated tools exist; Charon policy can only narrow that
+set. Hermes's dangerous-command approval remains a separate later guard for an
+admitted terminal call.
+
 After an admitted call finishes, the adapter emits a compact execution receipt
 asynchronously. The receipt excludes raw arguments and raw output. It is audit
 evidence, not authorization and not proof that a destination's semantic state

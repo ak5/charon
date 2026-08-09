@@ -9,7 +9,7 @@ from typing import Any
 from .admission import AdmissionClient
 from .config import Settings
 from .exporter import ReceiptExporter
-from .model import Operation, receipt_for
+from .model import Operation, receipt_for, safe_error_code
 
 
 class CharonHermesPlugin:
@@ -76,7 +76,13 @@ class CharonHermesPlugin:
                 "action": "block",
                 "message": "Charon denied this tool call (invalid-request).",
             }
-        admission = self._admission.admit(operation)
+        try:
+            admission = self._admission.admit(operation)
+        except Exception:
+            return {
+                "action": "block",
+                "message": "Charon denied this tool call (service-unavailable).",
+            }
         if not admission.allowed:
             return {
                 "action": "block",
@@ -94,6 +100,8 @@ class CharonHermesPlugin:
         result: str = "",
         task_id: str = "",
         duration_ms: int = 0,
+        status: str = "ok",
+        error_type: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Create a metadata-only receipt for an admitted call."""
@@ -108,13 +116,19 @@ class CharonHermesPlugin:
         if pending is None:
             return
         operation, authorization_id = pending
+        outcomes = {"ok": "succeeded", "error": "failed", "cancelled": "interrupted"}
+        outcome = outcomes.get(status, "unknown")
         receipt = receipt_for(
             operation,
             authorization_id,
             result if isinstance(result, str) else "",
             duration_ms,
             self._settings.include_result_digest,
+            outcome=outcome,
         )
+        error_code = safe_error_code(error_type)
+        if outcome == "failed" and error_code is not None:
+            receipt["error_code"] = error_code
         self._exporter.submit(receipt)
 
     def finalize(self, **kwargs: Any) -> None:

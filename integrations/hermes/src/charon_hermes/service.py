@@ -17,6 +17,8 @@ from typing import Any
 import uuid
 
 from .canonical import canonical_json, sha256_digest
+from .compatibility import CLASSIFICATIONS as REVIEWED_CLASSIFICATIONS
+from .compatibility import HERMES_COMMIT, HERMES_VERSION, PROFILE
 from .protocol import MAX_MESSAGE
 
 CLASSIFICATIONS = frozenset({"read", "mutation", "destructive", "secret-sensitive", "unknown"})
@@ -122,29 +124,36 @@ class Policy:
     """Closed exact-name admission policy."""
 
     def __init__(self, value: dict[str, Any]):
-        if set(value) != {"version", "allowed_tools"} or value.get("version") != 1:
+        if set(value) != {"version", "compatibility", "allowed_tools"} or value.get("version") != 2:
             raise ValueError("policy has unknown or missing fields")
+        compatibility = value.get("compatibility")
+        expected = {
+            "hermes_version": HERMES_VERSION,
+            "hermes_commit": HERMES_COMMIT,
+            "profile": PROFILE,
+        }
+        if compatibility != expected:
+            raise ValueError("policy compatibility does not match the pinned Hermes profile")
         allowed = value.get("allowed_tools")
         if not isinstance(allowed, list) or len(allowed) > 256:
             raise ValueError("allowed_tools must be a bounded list")
-        self._tools: dict[str, frozenset[str]] = {}
+        self._tools: dict[str, str] = {}
         for entry in allowed:
-            if not isinstance(entry, dict) or set(entry) != {"name", "classifications"}:
+            if not isinstance(entry, dict) or set(entry) != {"name", "classification"}:
                 raise ValueError("tool policy has unknown or missing fields")
             name = entry.get("name")
-            classifications = entry.get("classifications")
+            classification = entry.get("classification")
             if (
                 not isinstance(name, str)
                 or not name
                 or any(symbol in name for symbol in "*?[]")
-                or not isinstance(classifications, list)
-                or not classifications
-                or not set(classifications) <= CLASSIFICATIONS
+                or classification not in CLASSIFICATIONS - {"unknown"}
+                or REVIEWED_CLASSIFICATIONS.get(name) != classification
             ):
                 raise ValueError("tool policy is invalid")
             if name in self._tools:
                 raise ValueError("tool policy contains a duplicate exact name")
-            self._tools[name] = frozenset(classifications)
+            self._tools[name] = classification
 
     @classmethod
     def load(cls, path: Path) -> "Policy":
@@ -165,7 +174,7 @@ class Policy:
         allowed = self._tools.get(tool)
         if allowed is None:
             return False, "tool-not-allowed"
-        if classification not in allowed:
+        if classification != allowed:
             return False, "classification-not-allowed"
         return True, "exact-policy-match"
 
@@ -296,6 +305,17 @@ class Server(socketserver.ThreadingUnixStreamServer):
             self._authorizations.pop(authorization_id, None)
         return True
 
+    def health(self) -> dict[str, Any]:
+        """Return non-sensitive liveness and loaded-policy identity."""
+
+        return {
+            "version": 1,
+            "status": "ready",
+            "hermes_version": HERMES_VERSION,
+            "hermes_commit": HERMES_COMMIT,
+            "profile": PROFILE,
+        }
+
 
 class Handler(socketserver.StreamRequestHandler):
     """Handle one bounded integration protocol request."""
@@ -313,6 +333,7 @@ class Handler(socketserver.StreamRequestHandler):
         if not isinstance(message, dict) or set(message) not in (
             {"kind", "operation"},
             {"kind", "receipt"},
+            {"kind"},
         ):
             self._send({"error": "invalid-request", "version": 1})
             return
@@ -320,6 +341,8 @@ class Handler(socketserver.StreamRequestHandler):
             self._admit(message["operation"])
         elif message["kind"] == "receipt":
             self._receipt(message["receipt"])
+        elif message["kind"] == "health":
+            self._send(self.server.health())  # type: ignore[attr-defined]
         else:
             self._send({"error": "invalid-request", "version": 1})
 

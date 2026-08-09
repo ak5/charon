@@ -1,116 +1,204 @@
 # Charon for Hermes Agent
 
-`charon-hermes` is the first-party Hermes Agent integration for Charon. It adds
-fail-closed tool admission before every Hermes tool call and emits compact,
-metadata-only execution receipts after admitted calls finish.
+`charon-hermes` adds exact, fail-closed semantic tool admission and
+metadata-only receipts to Hermes Agent. This release supports Hermes
+`v2026.8.3` at commit `3c27eb6234bf91b8ceee9e9071591b31e9b148cb` and the
+browserless Telegram deployment profile.
 
-The package does not put Charon inside Hermes. It contains no API credentials,
-Charon manifests, provider references, secret-store access, or signing keys.
-Charon remains the independent credential-injection proxy and continues to
-enforce its own exact destination, method, and path policy.
+It preserves Hermes autonomy. When admitted, `memory`, skill management,
+planning, session recall, clarification, delegation, filesystem mutation,
+terminal, process, and code execution behave as Hermes implements them. The
+plugin never reads, clears, relocates, or writes `/opt/data`; Hermes continues
+to persist memories, learned/custom skills, sessions, and other state there.
 
-The normative data and transport rules are in the
-[`tool-integration` contract](../../contracts/tool-integration.md). The
-architectural decision and rejected alternatives are recorded in
-[`ADR 0006`](../../docs/adr/0006-hermes-tool-admission-and-receipts.md).
+## What each boundary does
 
-## Architecture
+| Boundary | Responsibility |
+| --- | --- |
+| Charon-Hermes plugin and admission service | Admit an exact semantic Hermes tool name and write metadata-only receipts. |
+| Hermes approval system | Inspect dangerous terminal commands and ask the Telegram operator for once/session/always/deny approval. Charon does not replace or bypass it. |
+| Charon forward proxy | Enforce signed workload identity and exact remote destination/method/path policy, then inject credentials without exposing them to Hermes. |
+| Network isolation | Prevent Hermes from reaching remote services around Charon. Tool admission alone does not provide egress control. |
+| Workload identity issuer | Issue short-lived, single-use Charon manifests. Neither this plugin nor its policy stores or issues manifests. |
 
-```text
-Hermes pre_tool_call
-  -> charon-hermes plugin
-  -> protected Unix admission service
-  -> exact tool-name/classification policy
-  -> allow or block
+Hermes calls the plugin before its tool guardrail and before execution. A
+Charon-admitted terminal call still reaches Hermes's command-aware approval
+guard. A Charon denial never executes the tool.
 
-Hermes post_tool_call
-  -> metadata-only receipt
-  -> bounded in-process queue
-  -> protected Unix service
-  -> mode-0600 hash-chained JSONL journal
-```
+## Compatibility and policy
 
-Permission admission is synchronous and bounded. Receipt export is asynchronous
-and never copies raw arguments or raw tool output. A missing socket, malformed
-decision, timeout, unknown tool, or classification mismatch denies the tool
-call.
+The reviewed inventory is in
+[`compatibility.py`](src/charon_hermes/compatibility.py). All 61 names in
+Hermes's pinned `_HERMES_CORE_TOOLS` list have an explicit classification.
+Browser tools remain classified for upgrade review but are absent from the
+recommended policy because `agent.disabled_toolsets: [browser]` and the
+derivative image both disable them. Desktop, Home Assistant, Kanban, and
+computer-use tools are runtime/configuration-gated and also excluded from this
+profile. Unknown names classify as `unknown`, cannot appear in policy, and are
+denied.
 
-## Install
+Classification is whole-tool and does not inspect argument values. Mixed tools
+such as `memory` and `todo` are conservatively `mutation`; `delegate_task`,
+`terminal`, `process`, `execute_code`, and `computer_use` are
+`secret-sensitive`. A classification edit changes a checked review digest, so
+it cannot pass unnoticed.
 
-Install this package into the same Python environment as Hermes:
+Generate and validate the exact policy:
 
 ```sh
-python -m pip install ./integrations/hermes
+charon-hermes-policy generate > hermes-policy.json
+chmod 0444 hermes-policy.json
+charon-hermes-policy validate --recommended hermes-policy.json
 ```
 
-Enable the pip-discovered plugin in Hermes:
+The checked example is [`examples/policy.json`](examples/policy.json). Omit
+`--recommended` to validate a deliberately narrowed exact subset.
+Wildcards, duplicate names, unreviewed classifications, different Hermes pins,
+and unknown fields are rejected. Removing an exact entry is the supported way
+to deny a deployment-eligible tool.
+
+## Container deployment contract
+
+Release CI publishes
+`ghcr.io/<owner>/<repository>-hermes:sha-<40-character-charon-commit>` with provenance and
+an SBOM. Pin it by digest in `ak5/infra`; do not use a mutable tag.
+
+The image serves two purposes:
+
+For this repository, GitHub resolves the placeholders from the repository
+owner and name. Use the same immutable reference for both purposes:
+
+1. Run it as the separate admission-service container.
+2. Copy `/opt/charon-hermes/wheels/charon_hermes-*.whl` from the same immutable
+   image into the downstream Hermes derivative and install that wheel into the
+   same Python environment as Hermes. No Charon source needs to be vendored.
+
+The admission image uses a digest-pinned Python 3.12.10 slim base. It does not
+contain Hermes, its credentials, or `/opt/data`; the wheel is compatible with
+Hermes's supported Python range.
+
+A downstream derivative can consume the wheel without a source checkout:
+
+```dockerfile
+ARG CHARON_HERMES_IMAGE
+FROM ${CHARON_HERMES_IMAGE} AS charon_hermes_artifact
+FROM <pinned-hermes-v2026.8.3-image>
+COPY --from=charon_hermes_artifact \
+  /opt/charon-hermes/wheels/charon_hermes-0.2.0-py3-none-any.whl /tmp/
+RUN python -m pip install --no-deps \
+  /tmp/charon_hermes-0.2.0-py3-none-any.whl \
+  && rm /tmp/charon_hermes-0.2.0-py3-none-any.whl
+```
+
+Set `CHARON_HERMES_IMAGE` to the immutable Charon-Hermes tag and registry
+digest. The wheel has no runtime Python dependencies outside the standard
+library.
+
+Enable pip discovery explicitly in Hermes configuration:
 
 ```yaml
 plugins:
   enabled:
     - charon-hermes
+agent:
+  disabled_toolsets:
+    - browser
 ```
 
-## Start the local integration service
+Run both containers as UID/GID `10000:10000`. Mount one dedicated socket volume
+at `/run/charon-hermes` in both containers. Mount the read-only policy and a
+private receipt-state volume only in the admission container. Do not share
+Docker's socket, Charon manifests, Vaultwarden state, provider references, or
+credentials.
 
-Copy `examples/policy.json` to an operator-owned path and list only exact tool
-names. Wildcards are rejected. Protect the policy from group or other writes.
+```text
+Hermes container                         admission container
+/opt/data (persistent; unchanged)        /etc/charon/policy.json (0444)
+/run/charon-hermes/admission.sock <----> /run/charon-hermes (0700, UID 10000)
+                                         /var/lib/charon-hermes (0700)
+```
+
+Start the service with:
 
 ```sh
-chmod 0644 /etc/charon/hermes-policy.json
-install -d -m 0700 /run/user/1000/charon-hermes
-install -d -m 0700 /var/lib/charon-hermes
-
 charon-hermes-admission \
-  --socket /run/user/1000/charon-hermes/admission.sock \
-  --policy /etc/charon/hermes-policy.json \
+  --socket /run/charon-hermes/admission.sock \
+  --policy /etc/charon/policy.json \
   --state-dir /var/lib/charon-hermes
 ```
 
-Configure Hermes with the absolute socket path:
+Set only this plugin configuration in Hermes:
 
 ```sh
-export CHARON_HERMES_ADMISSION_SOCKET=/run/user/1000/charon-hermes/admission.sock
+CHARON_HERMES_ADMISSION_SOCKET=/run/charon-hermes/admission.sock
+CHARON_HERMES_TIMEOUT_MS=250
+CHARON_HERMES_QUEUE_SIZE=1024
+CHARON_HERMES_RESULT_DIGESTS=0
 ```
 
-Optional settings:
+The socket directory must already exist, be owned by UID 10000, and have mode
+`0700`. The service creates a mode-`0600` socket. Configure the admission
+container to restart unless stopped and make Hermes depend on this readiness
+probe:
 
-- `CHARON_HERMES_TIMEOUT_MS`: admission and receipt-export timeout, 10–5000 ms;
-  default 250 ms.
-- `CHARON_HERMES_QUEUE_SIZE`: bounded receipt queue, 16–65536; default 1024.
-- `CHARON_HERMES_RESULT_DIGESTS`: `0` by default. Set `1` only when output
-  digest retention has a reviewed purpose; hashes can disclose low-entropy
-  results by comparison.
+```sh
+charon-hermes-policy health \
+  --socket /run/charon-hermes/admission.sock \
+  --timeout-ms 250
+```
 
-## Permission limits
+Readiness proves that the socket is protected, the service responds, and the
+loaded service matches the pinned Hermes/profile identity. Missing service,
+wrong ownership/mode, invalid data, replay, timeout, or incompatible response
+denies within the configured timeout. Receipt failure does not reverse a tool
+that already completed.
 
-The included service provides exact Hermes tool-level admission. It does not
-issue workload manifests and cannot widen Charon policy. A production workload
-still needs an external identity issuer and network isolation that prevents
-direct egress around Charon.
+## Rollout and rollback
 
-The socket uses filesystem ownership and mode `0600`. Running Hermes and the
-service under the same operating-system identity provides operational policy,
-not protection from a fully compromised Hermes process. Strong isolation
-requires the service and issuer to run under a separate identity and a brokered
-transport with authenticated peer identity.
+1. Back up and retain the existing `/opt/data` volume. Never mount it into the
+   admission container.
+2. Pin the Charon-Hermes image by digest. Extract and install its wheel while
+   building the pinned Hermes derivative.
+3. Generate and validate policy with that same release. Confirm the readiness
+   probe before enabling the plugin.
+4. In a non-production Telegram session, prove memory read/write; skills
+   list/view/create/update; todo; session search; clarification; delegation;
+   file read/write/patch; and an explicitly permitted terminal command. Use a
+   dangerous disposable command to confirm Hermes still prompts for approval.
+5. Remove one harmless exact tool from a policy copy and confirm it is denied
+   before execution. Stop the service and confirm calls deny within the timeout.
+6. Inspect the journal and logs using synthetic marker strings; verify arguments,
+   outputs, credentials, and memory contents are absent.
+7. Restart both containers and confirm the `/opt/data` state is unchanged.
 
-## Receipt semantics
+Rollback by removing `charon-hermes` from `plugins.enabled` and restoring the
+previous digest-pinned Hermes image. This restores the previous Hermes tool
+posture; it does not delete `/opt/data`. Stop and remove only the admission
+container/socket after Hermes no longer loads the plugin. Retain or archive the
+receipt journal according to operator policy.
 
-A receipt records identifiers, exact tool name, classification, argument
-digest, authorization ID, timing, outcome, result size, and an optional result
-digest. It never records raw arguments or raw output. The local journal adds a
-hash chain for tamper evidence; it is not a digital signature or independent
-proof against a compromised service host.
+## Receipt behavior
 
-Receipt-export failure does not change a completed tool result because Hermes
-post hooks are observational. The exporter increments an in-memory dropped
-counter and remains bounded. Workflows that require “no receipt, no execution”
-must execute the tool behind an external trusted tool gateway instead of relying
-on an in-process Hermes hook.
+Receipts contain identifiers, exact tool name, reviewed classification,
+argument-key names, an argument digest, timing, Hermes's hook outcome, result
+size, and optional result digest. Raw arguments and results never cross the
+socket or enter the journal. Result digests default off because low-entropy
+values can be guessed by comparison.
+
+The in-process queue is bounded and non-blocking. Full queues, service loss,
+invalid acknowledgements, and shutdown timeouts increment an in-memory loss
+counter and discard receipts; they do not block a completed tool. The journal
+hash chain detects edits only when a trusted earlier digest exists. It is not a
+signature and a compromised host can rewrite the journal and chain.
 
 ## Development
 
 ```sh
-mise run hermes-check
+HERMES_SOURCE=/path/to/hermes-agent-v2026.8.3 mise run hermes-check
+mise run check
 ```
+
+CI checks out the immutable upstream commit and fails if its Telegram inventory
+contains an unclassified tool, the recommended policy is incomplete, the
+reviewed classification digest changes, or the real `PluginContext` hook API is
+incompatible.

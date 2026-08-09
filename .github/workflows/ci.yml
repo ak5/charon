@@ -21,13 +21,25 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12.10"
+      - name: Check out pinned Hermes interface
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: NousResearch/hermes-agent
+          ref: 3c27eb6234bf91b8ceee9e9071591b31e9b148cb
+          path: .upstream/hermes-agent
       - name: Validate package metadata
         run: python -c 'import pathlib, tomllib; tomllib.loads(pathlib.Path("integrations/hermes/pyproject.toml").read_text())'
+      - name: Install integration wheel through its package interface
+        run: python -m pip install --no-deps ./integrations/hermes PyYAML==6.0.3
       - name: Test Hermes integration
         env:
+          HERMES_SOURCE: .upstream/hermes-agent
+          CHARON_HERMES_REQUIRE_ENTRYPOINT: "1"
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONPATH: integrations/hermes/src
         run: python -m unittest discover -s integrations/hermes/tests -v
+      - name: Build production integration image
+        run: docker build --platform linux/amd64 -f integrations/hermes/Dockerfile integrations/hermes
 
   rust:
     name: Rust quality gates

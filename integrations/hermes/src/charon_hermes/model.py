@@ -3,29 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import re
 import time
 from typing import Any
 import uuid
 
 from .canonical import sha256_digest
+from .compatibility import classify_tool
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _TOOL_NAME = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
-
-READ_TOOLS = frozenset({
-    "read_file",
-    "search_files",
-    "web_search",
-    "web_extract",
-    "session_search",
-    "skills_list",
-})
-MUTATION_TOOLS = frozenset({"write_file", "patch", "send_message", "cronjob"})
-DESTRUCTIVE_TOOLS = frozenset({"delete_file"})
-SECRET_TOOLS = frozenset({"terminal", "execute_code", "process"})
-
 
 def _identifier(value: str, fallback_prefix: str) -> str:
     if _IDENTIFIER.fullmatch(value):
@@ -33,18 +20,10 @@ def _identifier(value: str, fallback_prefix: str) -> str:
     return f"{fallback_prefix}:{uuid.uuid4().hex}"
 
 
-def classify_tool(tool_name: str) -> str:
-    """Classify known Hermes tools without interpreting model-supplied text."""
+def safe_error_code(value: Any) -> str | None:
+    """Return a bounded data-free Hermes error type, never an error message."""
 
-    if tool_name in READ_TOOLS:
-        return "read"
-    if tool_name in MUTATION_TOOLS:
-        return "mutation"
-    if tool_name in DESTRUCTIVE_TOOLS:
-        return "destructive"
-    if tool_name in SECRET_TOOLS:
-        return "secret-sensitive"
-    return "unknown"
+    return value if isinstance(value, str) and _IDENTIFIER.fullmatch(value) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,15 +95,6 @@ def receipt_for(
     }
     if "task_id" in operation.value:
         receipt["task_id"] = operation.value["task_id"]
-    try:
-        parsed = json.loads(result)
-    except (json.JSONDecodeError, TypeError):
-        parsed = None
-    if outcome == "succeeded" and isinstance(parsed, dict) and (
-        parsed.get("error") is not None or parsed.get("success") is False
-    ):
-        receipt["outcome"] = "failed"
-        receipt["error_code"] = "tool-error"
     if include_result_digest:
         receipt["result_digest"] = sha256_digest(result)
     return receipt
