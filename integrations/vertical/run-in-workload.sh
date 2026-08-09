@@ -13,7 +13,7 @@ result() {
     printf '{"case":"%s","outcome":"%s"}\n' "$1" "$2"
 }
 
-if GH_TOKEN=charon-placeholder \
+if GH_TOKEN='{{charon.github-read-user}}' \
     HTTPS_PROXY="$(proxy allowed charon)" \
     SSL_CERT_FILE=/etc/charon-ca/ca.pem \
     gh api user --jq .login >/tmp/allowed.out 2>/tmp/allowed.err; then
@@ -32,7 +32,7 @@ else
     result forbidden-host denied
 fi
 
-if GH_TOKEN=charon-placeholder \
+if GH_TOKEN='{{charon.github-read-user}}' \
     HTTPS_PROXY="$(proxy forbidden-operation charon)" \
     SSL_CERT_FILE=/etc/charon-ca/ca.pem \
     gh api --method DELETE user >/tmp/operation.out 2>/tmp/operation.err; then
@@ -42,7 +42,7 @@ else
     result forbidden-operation denied
 fi
 
-if GH_TOKEN=charon-placeholder \
+if GH_TOKEN='{{charon.github-read-user}}' \
     HTTPS_PROXY="$(proxy expired charon)" \
     SSL_CERT_FILE=/etc/charon-ca/ca.pem \
     gh api user >/tmp/expired.out 2>/tmp/expired.err; then
@@ -52,7 +52,7 @@ else
     result expired-identity denied
 fi
 
-if GH_TOKEN=charon-placeholder \
+if GH_TOKEN='{{charon.github-read-user}}' \
     HTTPS_PROXY="$(proxy provider-failure charon-locked)" \
     SSL_CERT_FILE=/etc/charon-ca/ca.pem \
     gh api user >/tmp/provider.out 2>/tmp/provider.err; then

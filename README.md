@@ -15,7 +15,8 @@
   >
 </p>
 
-Charon is a forward proxy that adds credentials to approved outbound requests.
+Charon is a transparent gateway and forward proxy that adds credentials to
+approved outbound requests.
 It lets a workload call an API without putting the API credential in that
 workload's environment, filesystem, or container image.
 
@@ -24,20 +25,20 @@ narrowly scoped access to an authenticated API without placing the long-lived
 credential inside the agent runtime. The same model works for CLIs, builds,
 development containers, and other programs.
 
-The workload sends a harmless placeholder instead of a real credential. Charon
-checks a short-lived signed authorization, matches the request against local
-policy, obtains the credential from the configured secret store, and replaces
-the placeholder only in the request sent upstream.
+The workload sends an opaque capability reference instead of a real credential. Charon
+checks authorization, matches the request against local policy, obtains the
+credential from the configured secret store, and hydrates the reference only in
+the request sent upstream.
 
 ```text
 workload                         Charon                     API
 no stored credential  ──▶  verify + apply policy  ──▶  authenticated request
-placeholder only            resolve credential
+capability reference        resolve credential + sanitize response
 ```
 
-Charon is an early-stage project. Its core proxy, authorization, HTTPS
-interception, provider adapter, and tests are implemented. The deployment and
-integration contracts are still being refined before a production release.
+Charon is an early-stage project. Its explicit proxy, transparent TLS gateway,
+authorization, structured hydration, response mediation, provider adapters,
+metadata-only receipts, and isolated tests are implemented.
 
 ## Why use it?
 
@@ -50,13 +51,26 @@ anything that compromises it.
 Charon moves the credential into a smaller, separately operated process. A
 request is allowed only when all of these agree:
 
-- a signed, short-lived, single-use workload manifest;
+- a signed, short-lived, single-use workload manifest in explicit-proxy mode,
+  or an Infra-isolated listener bound to one workload in transparent mode;
 - a named capability in Charon's configuration; and
 - the actual destination hostname, HTTP method, and path.
 
 The workload cannot choose a secret, a secret-store item, or an unconfigured
 destination. Charon does not return credentials to workloads and does not
 follow redirects after adding one.
+
+Applications keep using their ordinary credential settings. The configured
+value is public policy identity, not a credential:
+
+```dotenv
+GH_TOKEN={{charon.github.read}}
+POSTMARK_SERVER_TOKEN={{charon.postmark.send}}
+```
+
+An SDK or CLI treats these as normal values. Charon recognizes them only in the
+policy-declared authentication location and replaces them at the final outbound
+boundary.
 
 ## Concepts
 
@@ -65,9 +79,10 @@ These names appear in the configuration and protocol:
 | Term | Meaning |
 | --- | --- |
 | **Workload** | The program making the outbound request, such as an AI agent, CLI, build, or development container. |
-| **Manifest** | A short-lived, signed authorization carried with one request. It identifies the workload and names one capability. Each manifest can be used once. |
+| **Manifest** | A short-lived, signed authorization used by explicit-proxy clients. It identifies the workload and names one capability. Each manifest can be used once. |
 | **Capability** | A named permission in Charon's local policy, for example “read the current GitHub user.” It maps to one service and an exact set of methods and paths. |
-| **Service** | A configured destination and credential-injection rule: exact hostnames, the credential header, its placeholder, and a secret reference. |
+| **Capability reference** | Public syntax such as `{{charon.github.read}}`. It names local policy, never a provider item or secret. |
+| **Service** | An exact destination, typed hydration rule, provider reference, response mode, and resource limits. |
 | **Secret provider** | The adapter Charon uses to obtain a credential. The current implementations are an environment provider for disposable development and a Vaultwarden provider. |
 | **Realm** | One isolated Charon deployment: a process, configuration, secret-provider session, and policy. |
 
@@ -82,18 +97,23 @@ review before 1.0.
    capability.
 2. The workload sends a normal proxy request to Charon with
    `Proxy-Authorization: Charon <manifest>` and the configured public
-   placeholder in the credential header.
+   capability reference in the configured authentication sink. In transparent
+   mode, Infra routes an isolated workload to its policy-bound listener and no
+   proxy setting or manifest header is required.
 3. Charon verifies the signature, expiry, realm identity, and single-use nonce.
 4. Charon resolves the capability from its own configuration and checks the
    request's exact host, method, and path.
 5. Charon asks its configured provider for the policy-owned secret reference.
-6. Charon replaces the placeholder in the upstream request and returns the
-   API's response.
+6. Charon hydrates only the declared sink at the outbound boundary, mediates
+   the response using its explicit streaming mode, and writes a metadata-only
+   receipt.
 
 For HTTPS, the workload connects through Charon using HTTP `CONNECT` and trusts
 the operator-provided Charon CA. The
-[forward-proxy contract](contracts/forward-proxy.md) specifies the complete wire
-protocol. Charon's ordinary health endpoints are described by
+[forward-proxy contract](contracts/forward-proxy.md) specifies that wire
+protocol. The [transparent-gateway contract](contracts/transparent-gateway.md)
+specifies interception, capability references, hydration, response modes, and
+the Infra routing boundary. Charon's ordinary health endpoints are described by
 [OpenAPI](contracts/openapi.yaml).
 
 ## Development
@@ -139,7 +159,8 @@ cargo deny check
 [`examples/charon.dev.toml`](examples/charon.dev.toml) is a minimal local
 configuration. [`examples/charon.toml`](examples/charon.toml) shows the
 Vaultwarden, TLS, identity, capability, and service settings used in an
-operator-managed deployment.
+operator-managed explicit proxy. [`examples/transparent-gateway.toml`](examples/transparent-gateway.toml)
+shows a synthetic policy-bound transparent listener.
 
 Configuration is deny-by-default:
 
@@ -148,6 +169,8 @@ Configuration is deny-by-default:
 - remote destinations require HTTPS on port 443;
 - redirects are disabled;
 - request and response bodies have independent size limits; and
+- response parsing, compression, duration, idle time, and opaque media types
+  are explicit policy;
 - unknown configuration fields are rejected.
 
 ### Secret-store adapters
@@ -170,8 +193,9 @@ different provider during an outage. The extension rules are documented in
 
 ## Project boundaries
 
-Charon owns the request-time data path: manifest verification, local policy,
-credential lookup, injection, proxying, and redacted audit events.
+Charon owns the request-time data path: identity or isolated-listener binding,
+local policy, credential lookup, typed hydration, response mediation, proxying,
+and metadata-only receipts.
 
 It does not own:
 
@@ -205,6 +229,7 @@ mise run check
 - [Documentation index](docs/index.md)
 - [Contributing](CONTRIBUTING.md)
 - [Forward-proxy protocol](contracts/forward-proxy.md)
+- [Transparent gateway protocol](contracts/transparent-gateway.md)
 - [Hermes Agent integration](integrations/hermes/README.md)
 - [Configuration and integration boundaries](docs/integration-boundaries.md)
 - [Threat model](docs/threat-model.md)

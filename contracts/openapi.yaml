@@ -17,16 +17,16 @@ paths:
   /readyz:
     get:
       operationId: getReadiness
-      summary: Report realm identity and provider readiness
+      summary: Report realm identity, provider, and receipt-writer readiness
       responses:
         "200":
-          description: Configured provider is ready without resolving a secret
+          description: Configured provider and receipt writer are ready without resolving a secret
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Readiness"
         "503":
-          description: Provider is locked or unavailable
+          description: Provider or receipt writer is unavailable
           content:
             application/json:
               schema:
@@ -69,4 +69,3 @@ components:
           properties:
             status:
               const: unavailable
-

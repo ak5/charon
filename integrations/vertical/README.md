@@ -1,7 +1,7 @@
 # Secretless GitHub vertical fixture
 
 This fixture runs an unmodified `gh api user` in a disposable workload that has
-only `gh`, curl, a public Charon CA, public placeholders, and fresh workload
+only `gh`, curl, a public Charon CA, public capability references, and fresh workload
 manifests. It mounts no GitHub or Vaultwarden credential. Its only Docker network
 is `internal`; Charon alone also joins the upstream network and is configured to
 chain allowed requests through an operator-configured egress proxy. The example
@@ -45,6 +45,10 @@ export CHARON_BW_SESSION_PATH=/run/user/<uid>/charon-vaultwarden-session
 export CHARON_EGRESS_PROXY_PASSWORD_PATH=/run/user/<uid>/charon-egress-password
 ```
 
+The harness creates a private receipt-state directory inside the disposable
+fixture directory and mounts it only into Charon. Receipts contain metadata,
+not request/response bodies or credential values.
+
 The native `bw` binary is pinned to 2026.6.0 and checksum-verified. The
 appdata directory contains the encrypted vault and exact Vaultwarden server
 selection. The session should be memory-backed. The appdata, session, generated
@@ -86,7 +90,7 @@ The harness preserves `cases.jsonl`, the stopped workload's Docker inspect, and
 Charon's redacted logs under `integrations/vertical/evidence` (or
 `CHARON_EVIDENCE_DIRECTORY`). It fails if inspect/log output contains known
 GitHub token prefixes, provider/CA-private inputs, a manifest, the public
-placeholder, or the fixture sentinel. It also checks that exactly one allow and
+capability reference, or the fixture sentinel. It also checks that exactly one allow and
 five denies were recorded. Review the Charon events to correlate realm, tenant,
 persona, workspace, lease, workload, operation, generation, capability,
 service, method, path, status, and outcome without bearer material.

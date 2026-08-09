@@ -6,6 +6,8 @@ Start with the document that owns the question you are trying to answer.
 
 - [README](../README.md): product overview and fastest development path.
 - [Deployment](deployment.md): deployment configuration and operating steps.
+- [Transparent gateway contract](../contracts/transparent-gateway.md):
+  capability references, typed hydration, streaming mediation, and routing.
 - [Approval broker operations](approval-broker-operations.md): approval-broker
   integration and operational behavior.
 - [Vertical integration example](../integrations/vertical/README.md): isolated

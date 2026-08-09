@@ -6,6 +6,11 @@
 - `forward-proxy.md` is the normative public protocol contract for HTTP
   absolute-form requests, `CONNECT`, signed manifests, authorization ordering,
   and fail-closed responses.
+- `transparent-gateway.md` defines routing-bound transparent TLS interception,
+  capability references, typed hydration sinks, response streaming modes,
+  compression, correlation strength, and Infra ownership.
+- `data-plane-receipt.schema.json` defines the metadata-only network receipt
+  and hash-chain envelope.
 - `workload-claims.schema.json` validates the JSON payload signed by a workload
   identity issuer. The compact wire form remains
   `base64url(payload).base64url(ed25519_signature)`.

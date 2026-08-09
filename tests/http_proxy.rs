@@ -106,7 +106,8 @@ fn token(capability: &str, nonce: &str) -> Result<String> {
 }
 
 #[tokio::test]
-async fn replaces_placeholder_without_exposing_secret_to_client_config() -> Result<()> {
+async fn hydrates_capability_reference_without_exposing_secret_to_client() -> Result<()> {
+    let receipt_directory = tempfile::tempdir()?;
     let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
     let upstream_address = upstream_listener.local_addr()?;
     let upstream = Router::new().fallback(any(|headers: HeaderMap| async move {
@@ -127,6 +128,11 @@ async fn replaces_placeholder_without_exposing_secret_to_client_config() -> Resu
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: Some(charon::config::ReceiptConfig {
+            journal_path: receipt_directory.path().join("receipts.jsonl"),
+            state_path: receipt_directory.path().join("chain"),
+            queue_capacity: 8,
+        }),
         capabilities: vec![CapabilityPolicy {
             name: "mock-whoami".into(),
             persona: "developer".into(),
@@ -137,10 +143,13 @@ async fn replaces_placeholder_without_exposing_secret_to_client_config() -> Resu
         services: vec![ServicePolicy {
             name: "mock".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_MOCK_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     // Tests use an IP destination; production configuration intentionally
@@ -161,13 +170,26 @@ async fn replaces_placeholder_without_exposing_secret_to_client_config() -> Resu
             "proxy-authorization",
             format!("Charon {}", token("mock-whoami", "nonce-whoami-1234")?),
         )
-        .header("authorization", "Bearer charon-placeholder")
+        .header("authorization", "Bearer {{charon.mock-whoami}}")
         .send()
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let body: Bytes = response.bytes().await?;
-    assert_eq!(&body[..], b"Bearer real-secret");
+    assert_eq!(&body[..], b"Bearer [REDACTED]");
+    let journal_path = receipt_directory.path().join("receipts.jsonl");
+    let mut journal = String::new();
+    for _ in 0..20 {
+        journal = std::fs::read_to_string(&journal_path).unwrap_or_default();
+        if journal.contains("\"outcome\":\"completed\"") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert!(journal.contains("\"capability\":\"mock-whoami\""));
+    assert!(journal.contains("\"delivered_bytes\":17"));
+    assert!(!journal.contains("real-secret"));
+    assert!(!journal.contains("authorization"));
     Ok(())
 }
 
@@ -219,6 +241,7 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "proxied-read".into(),
             persona: "developer".into(),
@@ -229,10 +252,13 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
         services: vec![ServicePolicy {
             name: "upstream".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let secrets = StaticProvider(HashMap::from([(
@@ -251,7 +277,7 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
             "proxy-authorization",
             format!("Charon {}", token("proxied-read", "nonce-proxied-1234")?),
         )
-        .header("authorization", "Bearer charon-placeholder")
+        .header("authorization", "Bearer {{charon.proxied-read}}")
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
@@ -270,6 +296,7 @@ async fn denies_unlisted_destinations() -> Result<()> {
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "allowed-read".into(),
             persona: "developer".into(),
@@ -280,10 +307,13 @@ async fn denies_unlisted_destinations() -> Result<()> {
         services: vec![ServicePolicy {
             name: "allowed".into(),
             hosts: vec!["allowed.invalid".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let secrets = StaticProvider(HashMap::from([("CHARON_TOKEN".into(), "secret".into())]));
@@ -295,7 +325,7 @@ async fn denies_unlisted_destinations() -> Result<()> {
         .build()?;
     let response = client
         .get("http://127.0.0.2/resource")
-        .header("authorization", "Bearer charon-placeholder")
+        .header("authorization", "Bearer {{charon.allowed-read}}")
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::FORBIDDEN);
@@ -328,6 +358,7 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "protected".into(),
             persona: "developer".into(),
@@ -338,10 +369,13 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
         services: vec![ServicePolicy {
             name: "mock".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_MOCK_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let calls = Arc::new(AtomicUsize::new(0));
@@ -356,7 +390,7 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
         .build()?;
     let response = client
         .get(format!("http://{upstream_address}/protected"))
-        .header("authorization", "Bearer charon-placeholder")
+        .header("authorization", "Bearer {{charon.protected}}")
         .send()
         .await?;
 
@@ -376,6 +410,7 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "upload".into(),
             persona: "developer".into(),
@@ -386,10 +421,13 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
         services: vec![ServicePolicy {
             name: "mock".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_MOCK_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let calls = Arc::new(AtomicUsize::new(0));
@@ -404,7 +442,7 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
     stream
         .write_all(
             format!(
-                "POST http://127.0.0.1:9/upload HTTP/1.1\r\nHost: 127.0.0.1:9\r\nProxy-Authorization: Charon {manifest}\r\nAuthorization: Bearer charon-placeholder\r\nContent-Length: 16777217\r\nConnection: close\r\n\r\n"
+                "POST http://127.0.0.1:9/upload HTTP/1.1\r\nHost: 127.0.0.1:9\r\nProxy-Authorization: Charon {manifest}\r\nAuthorization: Bearer {{{{charon.upload}}}}\r\nContent-Length: 16777217\r\nConnection: close\r\n\r\n"
             )
             .as_bytes(),
         )
@@ -445,6 +483,7 @@ async fn never_follows_upstream_redirects_with_an_injected_credential() -> Resul
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "redirect-start".into(),
             persona: "developer".into(),
@@ -455,10 +494,13 @@ async fn never_follows_upstream_redirects_with_an_injected_credential() -> Resul
         services: vec![ServicePolicy {
             name: "redirect-test".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_REDIRECT_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let secrets = StaticProvider(HashMap::from([(
@@ -478,7 +520,7 @@ async fn never_follows_upstream_redirects_with_an_injected_credential() -> Resul
             "proxy-authorization",
             format!("Charon {}", token("redirect-start", "nonce-redirect-1234")?),
         )
-        .header("authorization", "Bearer charon-placeholder")
+        .header("authorization", "Bearer {{charon.redirect-start}}")
         .send()
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::TEMPORARY_REDIRECT);
@@ -508,11 +550,14 @@ async fn streaming_upstream(State(state): State<Arc<StreamingUpstream>>, body: B
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn streams_request_and_response_without_full_body_buffering() -> Result<()> {
     let (request_seen_tx, request_seen_rx) = oneshot::channel();
     let (response_tx, response_rx) = mpsc::channel(2);
     response_tx
-        .send(Ok(Bytes::from_static(b"response-first")))
+        .send(Ok(Bytes::from_static(
+            b"response-first-padding-longer-than-any-protected-value",
+        )))
         .await
         .map_err(|_| anyhow!("response fixture closed"))?;
     let upstream_state = Arc::new(StreamingUpstream {
@@ -535,6 +580,7 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
         provider: ProviderConfig::Environment,
         tls: None,
         identity: identity_config(),
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "stream".into(),
             persona: "developer".into(),
@@ -545,10 +591,13 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
         services: vec![ServicePolicy {
             name: "mock".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_STREAM_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let secrets = StaticProvider(HashMap::from([(
@@ -572,7 +621,7 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
                 "proxy-authorization",
                 format!("Charon {}", token("stream", "nonce-streaming-1234")?),
             )
-            .header("authorization", "Bearer charon-placeholder")
+            .header("authorization", "Bearer {{charon.stream}}")
             .body(reqwest::Body::wrap_stream(request_stream))
             .send()
             .await
@@ -594,18 +643,23 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
 
     let mut response = timeout(Duration::from_secs(2), request).await???;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
-    assert_eq!(
-        response.chunk().await?.as_deref(),
-        Some(b"response-first".as_slice())
-    );
+    let first = response
+        .chunk()
+        .await?
+        .ok_or_else(|| anyhow!("stream ended before the first mediated bytes"))?;
+    assert!(!first.is_empty());
     response_tx
         .send(Ok(Bytes::from_static(b"response-second")))
         .await
         .map_err(|_| anyhow!("response fixture closed"))?;
     drop(response_tx);
+    let mut delivered = first.to_vec();
+    while let Some(chunk) = response.chunk().await? {
+        delivered.extend_from_slice(&chunk);
+    }
     assert_eq!(
-        response.chunk().await?.as_deref(),
-        Some(b"response-second".as_slice())
+        delivered,
+        b"response-first-padding-longer-than-any-protected-valueresponse-second"
     );
     assert!(response.chunk().await?.is_none());
     Ok(())

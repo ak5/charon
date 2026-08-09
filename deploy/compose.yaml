@@ -17,6 +17,7 @@ services:
       RUST_LOG: charon=info
     volumes:
       - ./charon.toml:/etc/charon/charon.toml:ro
+      - ./receipts:/var/lib/charon/receipts
     healthcheck:
       test: ["CMD", "/usr/local/bin/charon", "healthcheck", "http://127.0.0.1:3129/healthz"]
       interval: 10s

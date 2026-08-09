@@ -14,12 +14,12 @@ use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use charon::{
     config::{
-        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ServicePolicy,
-        TlsConfig,
+        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ReceiptConfig,
+        ServicePolicy, TlsConfig,
     },
     identity::WorkloadClaims,
     provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
-    proxy::{AppState, app},
+    proxy::{AppState, app, serve_transparent},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
 use http::StatusCode;
@@ -204,6 +204,7 @@ async fn proxy(tls: TlsConfig) -> Result<std::net::SocketAddr> {
             max_ttl_seconds: 60,
             clock_skew_seconds: 2,
         },
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "allowed-user".into(),
             persona: "developer".into(),
@@ -214,10 +215,13 @@ async fn proxy(tls: TlsConfig) -> Result<std::net::SocketAddr> {
         services: vec![ServicePolicy {
             name: "allowed".into(),
             hosts: vec!["allowed.test".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer charon-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: "CHARON_ALLOWED_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     };
     let provider = StaticProvider(HashMap::from([(
@@ -227,6 +231,84 @@ async fn proxy(tls: TlsConfig) -> Result<std::net::SocketAddr> {
     let state = Arc::new(AppState::new(config, Arc::new(provider))?);
     tokio::spawn(async move { axum::serve(listener, app(state)).await });
     Ok(address)
+}
+
+#[tokio::test]
+async fn transparent_listener_derives_capability_and_denies_unknown_before_egress() -> Result<()> {
+    let (directory, tls, roots) = ca_fixture()?;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let config = Config {
+        realm: realm(),
+        listen: "127.0.0.1:0".parse()?,
+        upstream_proxy: None,
+        provider: ProviderConfig::Environment,
+        tls: Some(tls),
+        identity: IdentityConfig {
+            issuer: "connect-test".into(),
+            audience: "charon-test".into(),
+            public_key: base64::engine::general_purpose::STANDARD
+                .encode(signing_key().verifying_key().to_bytes()),
+            max_ttl_seconds: 60,
+            clock_skew_seconds: 2,
+        },
+        receipts: Some(ReceiptConfig {
+            journal_path: directory.path().join("receipts.jsonl"),
+            state_path: directory.path().join("receipt-chain"),
+            queue_capacity: 8,
+        }),
+        capabilities: vec![CapabilityPolicy {
+            name: "allowed-user".into(),
+            persona: "developer".into(),
+            service: "allowed".into(),
+            methods: vec!["GET".into()],
+            paths: vec!["/user".into()],
+        }],
+        services: vec![ServicePolicy {
+            name: "allowed".into(),
+            hosts: vec!["allowed.test".into()],
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
+            secret_ref: "CHARON_ALLOWED_TOKEN".into(),
+            response: charon::config::ResponsePolicy::text_stream(1024, 30, 5, 4096),
+            transparent_listen: Some(address),
+        }],
+    };
+    let state = Arc::new(AppState::new(
+        config,
+        Arc::new(StaticProvider(HashMap::from([(
+            "CHARON_ALLOWED_TOKEN".into(),
+            "fixture-secret".into(),
+        )]))),
+    )?);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(serve_transparent(
+        listener,
+        state,
+        "allowed".into(),
+        shutdown_rx,
+    ));
+    let client =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    let stream = TcpStream::connect(address).await?;
+    let mut tls = TlsConnector::from(Arc::new(client))
+        .connect(ServerName::try_from("allowed.test")?.to_owned(), stream)
+        .await?;
+    tls.write_all(
+        b"GET /user HTTP/1.1\r\nHost: allowed.test\r\nAuthorization: Bearer {{charon.unknown}}\r\nConnection: close\r\n\r\n",
+    )
+    .await?;
+    let mut response = Vec::new();
+    tls.read_to_end(&mut response).await?;
+    assert!(response.starts_with(b"HTTP/1.1 403"));
+    let _ = shutdown_tx.send(true);
+    task.await??;
+    Ok(())
 }
 
 async fn connect(
@@ -309,7 +391,7 @@ async fn negotiates_http2_and_reauthorizes_pseudo_authority() -> Result<()> {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
         response.into_body().collect().await?.to_bytes(),
-        "credential placeholder is missing"
+        "capability reference is missing"
     );
     let response = sender
         .send_request(
@@ -394,7 +476,7 @@ async fn rejects_sni_and_decrypted_authority_confusion() -> Result<()> {
     let stream = connect(address, "allowed.test:443", &format!("Basic {basic}")).await?;
     let mut tls = tls_connect(stream, roots, "allowed.test").await?;
     tls.write_all(
-        b"GET /user HTTP/1.1\r\nHost: denied.test\r\nAuthorization: Bearer charon-placeholder\r\nConnection: close\r\n\r\n",
+        b"GET /user HTTP/1.1\r\nHost: denied.test\r\nAuthorization: Bearer {{charon.allowed-user}}\r\nConnection: close\r\n\r\n",
     )
     .await?;
     let mut response = Vec::new();

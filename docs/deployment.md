@@ -123,7 +123,7 @@ distribute a new trust anchor.
 
 For a live non-production proof, issue a fresh single-use manifest and run
 `scripts/prove-gh-proxy.sh`. It configures an unmodified `gh api user` through
-`HTTPS_PROXY`, provides only the public CA and placeholder GitHub token to the
+`HTTPS_PROXY`, provides only the public CA and capability-reference GitHub token to the
 workload, and relies on Charon to resolve the mapped value. The CA key,
 Vaultwarden session, mapped item, and resolved value remain absent from the
 workload.
@@ -135,3 +135,74 @@ not change. A compromised intermediate requires immediate isolation of that
 realm endpoint, key/session revocation, and realm rebuild; unrelated realms and
 the offline root remain unchanged. Production credentials remain prohibited
 until the explicit owner security review covers ADR 0002 and ADR 0003.
+
+### CA commands and rotation
+
+Charon refuses to overwrite CA files. Generate a deployment CA only in an
+operator-owned protected directory:
+
+```sh
+charon ca generate "Charon deployment CA" /run/charon-ca/ca.pem /run/credentials/charon-ca-key.pem
+charon ca validate /run/charon-ca/ca.pem /run/credentials/charon-ca-key.pem
+charon ca fingerprint /run/charon-ca/ca.pem
+charon ca export /run/charon-ca/ca.pem /tmp/charon-public-ca.pem
+```
+
+The private key is created as `0600`; mount it read-only for the Charon UID and
+never install it in a workload. `validate` proves certificate/key identity and
+prints the public SHA-256 fingerprint. Compare that fingerprint through a
+separate trusted channel before installing the exported certificate.
+
+For rotation, generate the new CA or intermediate in a new generation
+directory, validate it, distribute and verify the new public trust anchor while
+the old one remains trusted, then atomically select the new Charon config and
+restart. Drain old connections before removing old trust and destroying the old
+runtime key. Rollback selects the previous immutable image, complete policy,
+certificate/key pair, and trust bundle together. Never mix certificate and key
+generations.
+
+## Containerized transparent gateway
+
+[`examples/transparent-gateway.toml`](../examples/transparent-gateway.toml) is
+the public contract consumed by downstream Infra. Run Charon as a dedicated
+non-root UID/GID. That identity alone owns the provider session, CA private key,
+receipt journal, and hash-chain state. Directories are `0700`; private files are
+`0400` or `0600`; the public CA can be `0644`. Do not mount application state,
+Hermes `/opt/data`, Git credential files, Docker sockets, or control-plane data.
+
+Infra creates one network namespace and one transparent listener lane per
+workload/service. It redirects only the exact destination's TCP/443 traffic to
+the configured `transparent_listen`, prevents every other workload from
+reaching that port, blocks direct workload egress, disables IPv6 or applies the
+equivalent deny policy, and rejects UDP/443. Charon does not install routing,
+iptables, nftables, Compose, or host policy.
+
+The normal `listen` address remains the network-restricted control and explicit
+proxy endpoint. `/healthz` proves the process is alive. `/readyz` checks the
+provider and receipt writer without resolving a credential. A failed provider,
+receipt state, CA, listener bind, policy validation, or DNS/TLS operation fails
+closed. Restart policy should be `on-failure`; readiness failure removes the
+gateway from service but must not open a bypass route.
+
+Validate and inventory policy before activation:
+
+```sh
+charon policy validate /etc/charon/charon.toml
+charon policy inventory /etc/charon/charon.toml
+charon healthcheck http://127.0.0.1:3129/readyz
+```
+
+Safe rollout uses a synthetic credential and isolated upstream first. Prove an
+exact read and mutation, each configured hydration sink in use, response
+streaming/cancellation, an omitted capability denial before provider access,
+service-loss denial, direct-egress denial, IPv6/QUIC denial, a metadata-only
+receipt, and restart without credential artifacts. For Git, disable hooks,
+credential helpers, recursive submodules, alternate object stores, and
+caller-controlled URL rewrites in the workload policy; allow only the exact
+smart-HTTP hostname and paths and select an opaque Git media type.
+
+Rollback removes the transparent route before stopping Charon, restores the
+previous immutable image plus its complete policy/CA/provider mapping, verifies
+readiness, then restores the route. Application state remains on its independent
+persistent volume. For Hermes that means `/opt/data` survives every Charon,
+plugin, and image change; Charon neither mounts nor modifies it.

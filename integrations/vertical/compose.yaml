@@ -17,6 +17,7 @@ x-charon: &charon
     - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
     - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
     - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
+    - "${CHARON_RECEIPT_STATE_PATH:?set protected receipt state directory}:/var/lib/charon/receipts"
   command: ["--config", "/etc/charon/charon.toml"]
   healthcheck:
     test: ["CMD", "/usr/local/bin/charon", "healthcheck", "http://127.0.0.1:3129/healthz"]
@@ -36,6 +37,7 @@ services:
       - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
       - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
       - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
+      - "${CHARON_RECEIPT_STATE_PATH:?set protected receipt state directory}:/var/lib/charon/receipts"
 
   charon-locked:
     <<: *charon
