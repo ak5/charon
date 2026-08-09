@@ -72,3 +72,16 @@ jobs:
           labels: org.opencontainers.image.revision=${{ needs.authorize.outputs.revision }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Publish Charon-Hermes integration image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: integrations/hermes
+          file: integrations/hermes/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: mode=max
+          sbom: true
+          tags: ${{ needs.authorize.outputs.image }}-hermes:sha-${{ needs.authorize.outputs.revision }}
+          labels: org.opencontainers.image.revision=${{ needs.authorize.outputs.revision }}
+          cache-from: type=gha,scope=charon-hermes
+          cache-to: type=gha,mode=max,scope=charon-hermes

@@ -148,6 +148,11 @@ capability without placing the underlying credential in that workload.
     bounded and asynchronous; its failure cannot weaken Charon authorization.
     In-process receipts are operational evidence, not independent attestation
     against a compromised workload.
+30. The Hermes adapter accepts only classifications from its immutable,
+    version-reviewed Telegram tool catalog. Browserless deployment policy omits
+    browser tools; newly introduced, unclassified, or policy-omitted names fail
+    closed. Charon semantic admission does not replace Hermes command approval,
+    Charon proxy enforcement, workload-manifest issuance, or network isolation.
 
 ## Known milestone-0 limitations
 

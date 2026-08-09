@@ -39,6 +39,11 @@ A receipt request is:
 The receipt conforms to `tool-receipt.schema.json`. The service accepts it only
 when its authorization ID and operation ID match one unconsumed admission.
 
+A readiness request is the closed object `{"kind":"health"}`. It returns only
+protocol version, readiness status, pinned workload version/commit, and profile.
+It contains no policy entries, paths, secrets, or workload state. A probe must
+reject any response that differs from its expected compatibility identity.
+
 ## Canonical digests
 
 Version 1 uses UTF-8 JSON with object keys sorted lexicographically, no
