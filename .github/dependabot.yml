@@ -15,3 +15,13 @@ updates:
     target-branch: dev
     schedule:
       interval: weekly
+  - package-ecosystem: docker
+    directory: /integrations/hermes
+    target-branch: dev
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /integrations/hermes
+    target-branch: dev
+    schedule:
+      interval: weekly

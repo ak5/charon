@@ -1,13 +1,37 @@
 {
-  "version": 1,
+  "version": 2,
+  "compatibility": {
+    "hermes_version": "v2026.8.3",
+    "hermes_commit": "3c27eb6234bf91b8ceee9e9071591b31e9b148cb",
+    "profile": "telegram-browserless"
+  },
   "allowed_tools": [
-    {
-      "name": "read_file",
-      "classifications": ["read"]
-    },
-    {
-      "name": "web_search",
-      "classifications": ["read"]
-    }
+    {"name":"bfl_flux3_get_result","classification":"read"},
+    {"name":"bfl_flux3_image_to_video","classification":"mutation"},
+    {"name":"bfl_flux3_keyframes_to_video","classification":"mutation"},
+    {"name":"bfl_flux3_prompting_guide","classification":"read"},
+    {"name":"bfl_flux3_text_to_video","classification":"mutation"},
+    {"name":"bfl_flux3_video_continuation","classification":"mutation"},
+    {"name":"clarify","classification":"mutation"},
+    {"name":"cronjob","classification":"mutation"},
+    {"name":"delegate_task","classification":"secret-sensitive"},
+    {"name":"execute_code","classification":"secret-sensitive"},
+    {"name":"image_generate","classification":"mutation"},
+    {"name":"memory","classification":"mutation"},
+    {"name":"patch","classification":"mutation"},
+    {"name":"process","classification":"secret-sensitive"},
+    {"name":"read_file","classification":"read"},
+    {"name":"search_files","classification":"read"},
+    {"name":"session_search","classification":"read"},
+    {"name":"skill_manage","classification":"mutation"},
+    {"name":"skill_view","classification":"read"},
+    {"name":"skills_list","classification":"read"},
+    {"name":"terminal","classification":"secret-sensitive"},
+    {"name":"text_to_speech","classification":"mutation"},
+    {"name":"todo","classification":"mutation"},
+    {"name":"vision_analyze","classification":"read"},
+    {"name":"web_extract","classification":"read"},
+    {"name":"web_search","classification":"read"},
+    {"name":"write_file","classification":"mutation"}
   ]
 }

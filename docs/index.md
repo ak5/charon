@@ -11,7 +11,9 @@ Start with the document that owns the question you are trying to answer.
 - [Vertical integration example](../integrations/vertical/README.md): isolated
   end-to-end demonstration.
 - [Hermes Agent integration](../integrations/hermes/README.md): fail-closed tool
-  admission and metadata-only execution receipts.
+  admission, receipts, and deployment.
+- [Hermes v2026.8.3 compatibility](hermes-v2026.8.3-compatibility.md): exact
+  Telegram inventory, classifications, runtime gates, and upgrade contract.
 
 ## Understand the design
 

@@ -1,6 +1,6 @@
 # ADR 0006: Hermes tool admission and receipts
 
-Status: accepted for initial integration
+Status: accepted for Hermes v2026.8.3 production integration
 
 ## Context
 
@@ -27,6 +27,12 @@ tool-name and classification policy. Unknown tools, missing service state,
 timeouts, malformed responses, replayed operation IDs, and negative decisions
 block execution.
 
+Compatibility is pinned to an immutable Hermes tag and commit. A reviewed
+whole-tool catalog classifies every name in the Telegram core bundle. Mixed
+read/write tools use the more sensitive mutation classification; classifications
+never depend on raw argument values. Browser names remain known but are omitted
+from the browserless deployment policy.
+
 After an admitted call, the plugin emits a metadata-only receipt through a
 bounded asynchronous queue. The integration service binds the receipt to the
 single admission authorization and appends it to a mode-`0600`, hash-chained
@@ -47,6 +53,11 @@ Admission is synchronous, local, bounded, and fail-closed. Receipt export is
 asynchronous and bounded because Hermes post-tool hooks cannot revoke an
 already completed operation. Export failure increments a loss counter and does
 not affect Charon authorization.
+
+Hermes evaluates the Charon pre-tool hook before its tool guardrail. Charon
+returns allow or block only. An admitted terminal or code call continues into
+Hermes's existing command-aware Telegram approval system; this integration
+neither bypasses nor replaces that human approval.
 
 The journal hash chain detects modification when a trusted copy of a previous
 digest exists. It is not a digital signature and does not prove integrity after
