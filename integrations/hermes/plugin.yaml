@@ -1,0 +1,3 @@
+name: charon-hermes
+version: "0.1.0"
+description: Fail-closed Charon permissions and metadata-only tool receipts

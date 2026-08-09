@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ak5/charon/contracts/tool-operation.schema.json",
+  "title": "Normalized tool operation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "operation_id",
+    "integration",
+    "session_id",
+    "tool_call_id",
+    "tool_name",
+    "classification",
+    "arguments_digest",
+    "argument_keys",
+    "requested_at"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "operation_id": { "$ref": "#/$defs/identifier" },
+    "integration": { "const": "hermes" },
+    "session_id": { "$ref": "#/$defs/identifier" },
+    "task_id": { "$ref": "#/$defs/identifier" },
+    "tool_call_id": { "$ref": "#/$defs/identifier" },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "classification": {
+      "enum": ["read", "mutation", "destructive", "secret-sensitive", "unknown"]
+    },
+    "arguments_digest": { "$ref": "#/$defs/digest" },
+    "argument_keys": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[A-Za-z0-9._-]+$"
+      }
+    },
+    "requested_at": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

@@ -2,9 +2,11 @@
 
 ## Repository shape and commands
 
-Charon is a single Rust package with contracts, deployment examples, integration
-fixtures, and durable design documentation in the same repository. Cargo owns
-Rust build and test behavior. `mise.toml` pins Rust and `cargo-deny` and provides
+Charon is a Rust package with contracts, deployment examples, first-party
+integrations, and durable design documentation in the same repository. Cargo
+owns Rust build and test behavior. Each integration owns its native package and
+tests under `integrations/<name>/`. `mise.toml` pins Rust, Python, and
+`cargo-deny` and provides
 stable operator tasks across formatting, linting, tests, deployment-contract
 tests, and dependency policy. This cross-tool quality gate is why
 `mise run check` exists.
@@ -41,6 +43,7 @@ deletion. The project does not use a merge queue.
 | Architectural decision | `docs/adr/` |
 | Contributor, branch, merge, or release policy | `CONTRIBUTING.md` and this document |
 | Commands or tool versions | `mise.toml`, `README.md`, and this document |
+| Workload integration behavior | `integrations/<name>/`, shared `contracts/`, and `docs/integration-boundaries.md` |
 
 ## Repository bootstrap
 

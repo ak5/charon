@@ -41,14 +41,14 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Validate vertical harness scripts
         run: |
-          sh -n integration/vertical/run.sh
-          sh -n integration/vertical/run-in-workload.sh
-          sh -n integration/vertical/prepare-linux-bw.sh
+          sh -n integrations/vertical/run.sh
+          sh -n integrations/vertical/run-in-workload.sh
+          sh -n integrations/vertical/prepare-linux-bw.sh
       - name: Build secretless gh workload fixture
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
-          context: integration/vertical
-          file: integration/vertical/Dockerfile
+          context: integrations/vertical
+          file: integrations/vertical/Dockerfile
           platforms: linux/amd64
           push: false
           provenance: mode=max

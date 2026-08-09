@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ak5/charon/contracts/tool-receipt.schema.json",
+  "title": "Tool execution receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "receipt_id",
+    "operation_id",
+    "integration",
+    "session_id",
+    "tool_call_id",
+    "tool_name",
+    "classification",
+    "arguments_digest",
+    "authorization_id",
+    "started_at",
+    "finished_at",
+    "duration_ms",
+    "outcome",
+    "result_size",
+    "raw_output_retained"
+  ],
+  "properties": {
+    "version": { "const": 1 },
+    "receipt_id": { "$ref": "#/$defs/identifier" },
+    "operation_id": { "$ref": "#/$defs/identifier" },
+    "integration": { "const": "hermes" },
+    "session_id": { "$ref": "#/$defs/identifier" },
+    "task_id": { "$ref": "#/$defs/identifier" },
+    "tool_call_id": { "$ref": "#/$defs/identifier" },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "classification": {
+      "enum": ["read", "mutation", "destructive", "secret-sensitive", "unknown"]
+    },
+    "arguments_digest": { "$ref": "#/$defs/digest" },
+    "authorization_id": { "$ref": "#/$defs/identifier" },
+    "started_at": { "type": "integer", "minimum": 0 },
+    "finished_at": { "type": "integer", "minimum": 0 },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "outcome": { "enum": ["succeeded", "failed", "interrupted", "unknown"] },
+    "result_size": { "type": "integer", "minimum": 0 },
+    "result_digest": { "$ref": "#/$defs/digest" },
+    "error_code": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "raw_output_retained": { "const": false }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

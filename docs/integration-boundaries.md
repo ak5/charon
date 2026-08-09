@@ -20,6 +20,7 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Upstream egress | Charon → proxy | HTTP(S) forward proxy with optional protected file-backed Basic auth | routing dependency, not an authorization source | exact destination authorization remains local |
 | PKI | operator → Charon/workload | offline root and one realm intermediate | operator trust boundary | exact-host leaf issuance; PKI never selects persona or capability |
 | Audit sink | Charon → logs | structured JSON events | may observe approved identifiers only | no headers, bodies, manifests, nonces, provider references, sessions, or keys |
+| Workload tool adapter | workload runtime ↔ local integration service | normalized operation, admission decision, and metadata-only receipt; schemas in [`contracts/`](../contracts/) | advisory inside the workload boundary unless isolated by OS identity and transport | outside Charon; cannot select destinations, capabilities, providers, or secrets |
 
 ## Workload protocol
 
@@ -101,3 +102,22 @@ authority or prescribe a transport.
 
 This separation prevents an Internet-facing credential data plane from also
 becoming a privileged lifecycle control plane.
+
+## Workload tool adapters and receipts
+
+A workload-specific adapter can observe semantic tool calls before they become
+network requests. The first adapter, [`charon-hermes`](../integrations/hermes/README.md),
+uses Hermes lifecycle hooks to submit a metadata-only normalized operation to a
+protected local admission service. Missing, malformed, expired, or negative
+admission blocks the Hermes tool call.
+
+After an admitted call finishes, the adapter emits a compact execution receipt
+asynchronously. The receipt excludes raw arguments and raw output. It is audit
+evidence, not authorization and not proof that a destination's semantic state
+changed. Charon independently records only its network-level outcome.
+
+An in-process workload plugin remains part of the untrusted workload boundary.
+It cannot replace direct-egress denial or Charon's manifest and local policy
+checks. A deployment that needs receipts resistant to workload compromise must
+place execution and receipt signing behind an independently isolated tool
+gateway.

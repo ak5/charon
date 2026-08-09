@@ -30,7 +30,7 @@ platform. The helper verifies the exact SHA-256 digest published in Bitwarden's
 GitHub release metadata and refuses to replace an existing file:
 
 ```sh
-integration/vertical/prepare-linux-bw.sh \
+integrations/vertical/prepare-linux-bw.sh \
   "$PWD/.vertical-runtime/bin/bw"
 ```
 
@@ -71,7 +71,7 @@ The issuer key remains outside Charon and every container.
 Run immediately after issuance:
 
 ```sh
-integration/vertical/run.sh
+integrations/vertical/run.sh
 ```
 
 ## Assertions and evidence
@@ -83,7 +83,7 @@ case. Both Charon instances have upstream access; the workload network itself
 has no external route.
 
 The harness preserves `cases.jsonl`, the stopped workload's Docker inspect, and
-Charon's redacted logs under `integration/vertical/evidence` (or
+Charon's redacted logs under `integrations/vertical/evidence` (or
 `CHARON_EVIDENCE_DIRECTORY`). It fails if inspect/log output contains known
 GitHub token prefixes, provider/CA-private inputs, a manifest, the public
 placeholder, or the fixture sentinel. It also checks that exactly one allow and

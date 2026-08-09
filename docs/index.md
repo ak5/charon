@@ -8,8 +8,10 @@ Start with the document that owns the question you are trying to answer.
 - [Deployment](deployment.md): deployment configuration and operating steps.
 - [Approval broker operations](approval-broker-operations.md): approval-broker
   integration and operational behavior.
-- [Vertical integration example](../integration/vertical/README.md): isolated
+- [Vertical integration example](../integrations/vertical/README.md): isolated
   end-to-end demonstration.
+- [Hermes Agent integration](../integrations/hermes/README.md): fail-closed tool
+  admission and metadata-only execution receipts.
 
 ## Understand the design
 

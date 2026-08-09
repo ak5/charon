@@ -1,5 +1,6 @@
 [tools]
 rust = "1.97.1"
+python = "3.12.10"
 "github:EmbarkStudios/cargo-deny" = "0.20.2"
 
 [settings]
@@ -7,7 +8,12 @@ disable_tools = []
 
 [tasks.check]
 description = "Run the complete local quality gate"
-depends = ["fmt-check", "clippy", "test", "deploy-test", "deny"]
+depends = ["fmt-check", "clippy", "test", "deploy-test", "deny", "hermes-check"]
+
+[tasks.hermes-check]
+description = "Test the first-party Hermes permission and receipt integration"
+env = { PYTHONDONTWRITEBYTECODE = "1", PYTHONPATH = "integrations/hermes/src" }
+run = "python -m unittest discover -s integrations/hermes/tests -v"
 
 [tasks.deploy-test]
 description = "Test the fail-closed deployment and ephemeral registry auth contract"
