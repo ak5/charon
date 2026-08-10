@@ -84,10 +84,12 @@ upstream error body.
 
 Compression is explicit. `identity-only` asks upstream for identity encoding
 and rejects encoded responses. `reject` rejects encoding without negotiation.
-`opaque` is legal only with `opaque-stream`; Charon does not claim to sanitize
-compressed opaque bytes. WebSocket upgrades are denied because `upgrade` is a
-forbidden hop-by-hop field. A future WebSocket mode requires protocol-specific
-frame policy and a new contract version.
+`opaque` is reserved and rejected by current policy validation: compressed
+opaque bytes cannot be scanned without risking silent payload corruption. A
+future bounded decompress, sanitize, and recompress implementation requires a
+contract review. WebSocket upgrades are denied because `upgrade` is a forbidden
+hop-by-hop field. A future WebSocket mode requires protocol-specific frame
+policy and a new contract version.
 
 ## Redirects, errors, and receipts
 
@@ -107,7 +109,12 @@ credential resolution; a queue failure after partial delivery is logged as
 The SHA-256 chain detects edits, deletion, and reordering only when an operator
 retains a trusted checkpoint outside the journal. It is not a signature, does
 not protect against a compromised Charon process, and does not prove the remote
-service performed a semantic action.
+service performed a semantic action. The journal is the recoverable source of
+truth. Startup replays and validates every bounded entry, repairs a checkpoint
+that matches an earlier verified entry, truncates only an incomplete tail whose
+checkpoint matches the last complete entry, and rejects an invalid chain or an
+unrecognized checkpoint. Each complete journal entry is synced before the
+checkpoint is atomically replaced and its directory is synced.
 
 ## Ownership and correlation
 

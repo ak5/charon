@@ -184,6 +184,14 @@ receipt state, CA, listener bind, policy validation, or DNS/TLS operation fails
 closed. Restart policy should be `on-failure`; readiness failure removes the
 gateway from service but must not open a bypass route.
 
+At startup Charon replays the bounded receipt journal and verifies its chain.
+The journal is the recovery source of truth: Charon repairs a checkpoint that
+matches an earlier verified entry and discards only an incomplete tail whose
+checkpoint still matches the last complete entry. An invalid chain or an
+unrecognized checkpoint prevents startup. Back up the journal and checkpoint
+together, and retain an independent trusted digest when external tamper
+evidence is required.
+
 Validate and inventory policy before activation:
 
 ```sh

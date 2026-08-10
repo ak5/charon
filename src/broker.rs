@@ -207,7 +207,8 @@ pub enum StructuredStreamFormat {
 pub enum CompressionPolicy {
     /// Ask the upstream for identity encoding and reject encoded responses.
     IdentityOnly,
-    /// Permit encoded bytes only with an explicitly opaque response mode.
+    /// Reserved for a future bounded decompress/sanitize/recompress mode.
+    /// Current policy validation rejects this value.
     Opaque,
     /// Reject any upstream content encoding.
     Reject,

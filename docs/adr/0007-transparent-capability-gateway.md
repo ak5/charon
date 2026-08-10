@@ -33,8 +33,9 @@ parallel proxy or provider system.
 
 Every service selects structured SSE/NDJSON streaming, bounded JSON, rolling
 text, or allowlisted opaque response mode plus explicit compression and resource
-limits. Data-plane receipts finalize from actual stream delivery through a
-bounded single-writer journal.
+limits. Compressed opaque bodies are rejected until bounded decompression and
+sanitization exist. Data-plane receipts finalize from actual stream delivery
+through a bounded single-writer journal.
 
 DNS answers are exact-name allowlisted, IPv4-only, and pinned after first use
 for the process lifetime. WebSockets are denied until a protocol-specific frame

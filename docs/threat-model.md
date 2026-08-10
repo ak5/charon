@@ -174,14 +174,17 @@ capability without placing the underlying credential in that workload.
 34. Response policy explicitly selects structured SSE/NDJSON streaming,
     bounded JSON buffering, rolling text streaming, or allowlisted opaque
     streaming. Authentication, session, and framing headers are removed first.
-35. Compression is identity-only, rejected, or explicitly opaque. WebSocket
-    upgrade is denied. Sanitization failure after partial delivery stops the
-    stream without appending upstream details.
+35. Compression is identity-only or rejected. Opaque compressed response
+    policy is reserved and fails validation until bounded decompression and
+    sanitization exist. WebSocket upgrade is denied. Sanitization failure after
+    partial delivery stops the stream without appending upstream details.
 36. Data-plane receipts contain only the closed metadata schema. New requests
     fail before resolution when the bounded queue or writer is unavailable.
     The hash chain is meaningful only relative to an independently retained
     checkpoint; it is neither a signature nor evidence against a compromised
-    Charon process.
+    Charon process. Startup replays the bounded journal as the source of truth,
+    reconciles a stale checkpoint, and rejects an invalid chain or unrecognized
+    checkpoint. Journal data is synced before checkpoint replacement.
 
 ## Known milestone-0 limitations
 

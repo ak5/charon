@@ -691,11 +691,9 @@ fn validate_response_policy(service: &ServicePolicy) -> Result<()> {
         }
         ResponseMode::TextStream => {}
     }
-    if policy.compression == CompressionPolicy::Opaque
-        && !matches!(policy.body, ResponseMode::OpaqueStream { .. })
-    {
+    if policy.compression == CompressionPolicy::Opaque {
         bail!(
-            "service {} permits opaque compression for a parsed body",
+            "service {} requests unsupported opaque compression",
             service.name
         );
     }
@@ -850,6 +848,13 @@ mod tests {
                 .unwrap_or_else(|error| panic!("{error}")),
         );
         assert!(ipv6.validate().is_err());
+
+        let mut compressed_opaque = config();
+        compressed_opaque.services[0].response.body = ResponseMode::OpaqueStream {
+            content_types: vec!["application/octet-stream".into()],
+        };
+        compressed_opaque.services[0].response.compression = CompressionPolicy::Opaque;
+        assert!(compressed_opaque.validate().is_err());
     }
 
     #[test]

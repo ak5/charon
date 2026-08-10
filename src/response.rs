@@ -221,6 +221,8 @@ where
     let state = StructuredState {
         upstream: Box::pin(upstream),
         pending: Vec::new(),
+        incoming: Bytes::new(),
+        incoming_offset: 0,
         format,
         max_record_bytes,
         forbidden_fields,
@@ -232,6 +234,16 @@ where
                 next_record(&state.pending, state.format, state.finished)
             {
                 state.pending.drain(..consumed);
+                if record.len() > state.max_record_bytes {
+                    state.pending.zeroize();
+                    state.finished = true;
+                    return Some((
+                        Err(std::io::Error::other(
+                            "structured response record is too large",
+                        )),
+                        state,
+                    ));
+                }
                 let output = sanitize_record(&record, state.format, &state.forbidden_fields)
                     .map(Bytes::from)
                     .map_err(|_| std::io::Error::other("structured response sanitization failed"));
@@ -240,19 +252,29 @@ where
             if state.finished {
                 return None;
             }
+            if state.incoming_offset < state.incoming.len() {
+                state.pending.push(state.incoming[state.incoming_offset]);
+                state.incoming_offset += 1;
+                let framing_allowance = match state.format {
+                    StructuredStreamFormat::Sse => 4,
+                    StructuredStreamFormat::Ndjson => 1,
+                };
+                if state.pending.len() > state.max_record_bytes.saturating_add(framing_allowance) {
+                    state.pending.zeroize();
+                    state.finished = true;
+                    return Some((
+                        Err(std::io::Error::other(
+                            "structured response record is too large",
+                        )),
+                        state,
+                    ));
+                }
+                continue;
+            }
             match state.upstream.next().await {
                 Some(Ok(chunk)) => {
-                    if state.pending.len().saturating_add(chunk.len()) > state.max_record_bytes {
-                        state.pending.zeroize();
-                        state.finished = true;
-                        return Some((
-                            Err(std::io::Error::other(
-                                "structured response record is too large",
-                            )),
-                            state,
-                        ));
-                    }
-                    state.pending.extend_from_slice(&chunk);
+                    state.incoming = chunk;
+                    state.incoming_offset = 0;
                 }
                 Some(Err(_)) => {
                     state.pending.zeroize();
@@ -283,6 +305,8 @@ pub fn sanitize_json_document(input: &[u8], forbidden_fields: &[String]) -> Resu
 struct StructuredState<S> {
     upstream: Pin<Box<S>>,
     pending: Vec<u8>,
+    incoming: Bytes,
+    incoming_offset: usize,
     format: StructuredStreamFormat,
     max_record_bytes: usize,
     forbidden_fields: Vec<String>,
@@ -506,6 +530,57 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"))
             .concat();
         assert_eq!(output, b"data: {\"text\":\"safe\"}\n\n");
+    }
+
+    #[tokio::test]
+    async fn structured_stream_limits_records_not_coalesced_network_chunks() {
+        let upstream = stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(
+            b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n",
+        ))]);
+        let output = super::sanitize_structured_stream(
+            upstream,
+            crate::broker::StructuredStreamFormat::Ndjson,
+            8,
+            Vec::new(),
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .concat();
+        assert_eq!(output, b"{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n");
+
+        let oversized = stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(
+            b"{\"number\":123}\n",
+        ))]);
+        let result = super::sanitize_structured_stream(
+            oversized,
+            crate::broker::StructuredStreamFormat::Ndjson,
+            8,
+            Vec::new(),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_err());
+
+        let sse = stream::iter([Ok::<_, std::io::Error>(Bytes::from_static(
+            b"data: {\"n\":1}\n\ndata: {\"n\":2}\n\n",
+        ))]);
+        let output = super::sanitize_structured_stream(
+            sse,
+            crate::broker::StructuredStreamFormat::Sse,
+            13,
+            Vec::new(),
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .concat();
+        assert_eq!(output, b"data: {\"n\":1}\n\ndata: {\"n\":2}\n\n");
     }
 
     #[test]

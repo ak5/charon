@@ -20,7 +20,7 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Destination | Charon → exact host | HTTPS on port 443, optionally through configured egress; literal loopback HTTP only for local fixtures | untrusted response source | credential injection after authorization; redirects disabled |
 | Upstream egress | Charon → proxy | HTTP(S) forward proxy with optional protected file-backed Basic auth | routing dependency, not an authorization source | exact destination authorization remains local |
 | PKI | operator → Charon/workload | offline root and one realm intermediate | operator trust boundary | exact-host leaf issuance; PKI never selects persona or capability |
-| Receipt journal | Charon → protected JSONL/state files | [`data-plane-receipt.schema.json`](../contracts/data-plane-receipt.schema.json) | local operator evidence | bounded metadata and delivery outcome; no headers, queries, bodies, provider references, sessions, or keys |
+| Receipt journal | Charon → protected JSONL/state files | [`data-plane-receipt.schema.json`](../contracts/data-plane-receipt.schema.json) | local operator evidence | bounded metadata and delivery outcome; journal replay is authoritative and reconciles the checkpoint; no headers, queries, bodies, provider references, sessions, or keys |
 | Workload tool adapter | workload runtime ↔ local integration service | normalized operation, admission decision, and metadata-only receipt; schemas in [`contracts/`](../contracts/) | advisory inside the workload boundary unless isolated by OS identity and transport | outside Charon; cannot select destinations, capabilities, providers, or secrets |
 
 ## Workload protocol

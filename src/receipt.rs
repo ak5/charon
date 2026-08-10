@@ -2,8 +2,8 @@
 
 use std::{
     fs::{File, OpenOptions},
-    io::Write as _,
-    path::PathBuf,
+    io::{Read as _, Write as _},
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -13,14 +13,17 @@ use std::{
 use anyhow::{Context, Result, bail};
 use axum::body::Bytes;
 use futures_util::{Stream, StreamExt as _, stream};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use tokio::sync::mpsc;
+use zeroize::Zeroize;
 
 use crate::{config::ReceiptConfig, provider::ensure_private_file};
 
+const MAX_RECEIPT_LINE_BYTES: usize = 64 * 1024;
+
 /// Safe request outcome recorded without headers, arguments, or bodies.
-#[derive(Clone, Copy, Debug, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReceiptOutcome {
     /// The sanitized response stream completed.
@@ -34,7 +37,8 @@ pub enum ReceiptOutcome {
 }
 
 /// Metadata allowed in the durable data-plane journal.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DataPlaneReceipt {
     /// Stable realm identifier.
     pub realm: String,
@@ -60,6 +64,13 @@ pub struct DataPlaneReceipt {
     pub outcome: ReceiptOutcome,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptEnvelope {
+    receipt: DataPlaneReceipt,
+    chain: String,
+}
+
 /// Cloneable bounded journal handle.
 #[derive(Clone)]
 pub struct ReceiptJournal {
@@ -79,9 +90,14 @@ impl ReceiptJournal {
     ///
     /// Returns an error before listener bind when paths cannot be opened.
     pub fn start(config: &ReceiptConfig) -> Result<Self> {
-        let journal = open_private_append(&config.journal_path)?;
+        let journal_existed = config.journal_path.exists();
+        drop(open_private_append(&config.journal_path)?);
         ensure_private_file(&config.journal_path, "receipt journal")?;
-        let previous = read_state(&config.state_path)?;
+        if !journal_existed {
+            sync_parent(&config.journal_path)?;
+        }
+        let previous = recover_chain(&config.journal_path, &config.state_path)?;
+        let journal = open_private_append(&config.journal_path)?;
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
         let healthy = Arc::new(AtomicBool::new(true));
         let worker_health = Arc::clone(&healthy);
@@ -229,48 +245,137 @@ async fn write_loop(
         hasher.update(previous);
         hasher.update(&payload);
         previous.copy_from_slice(&hasher.finalize());
-        let envelope = serde_json::json!({
-            "receipt": receipt,
-            "chain": hex(&previous),
-        });
+        let envelope = ReceiptEnvelope {
+            receipt,
+            chain: hex(&previous),
+        };
         serde_json::to_writer(&mut journal, &envelope).context("receipt append failed")?;
         journal.write_all(b"\n").context("receipt append failed")?;
-        journal.flush().context("receipt flush failed")?;
+        journal.sync_data().context("receipt sync failed")?;
         write_state(&state_path, &previous)?;
     }
     Ok(())
 }
 
-fn read_state(path: &PathBuf) -> Result<[u8; 32]> {
+fn read_state(path: &Path) -> Result<Option<[u8; 32]>> {
     if !path.exists() {
-        let _ = open_private_append(path)?;
-        return Ok([0; 32]);
+        return Ok(None);
     }
     ensure_private_file(path, "receipt state")?;
     let value = std::fs::read_to_string(path).context("receipt state is unavailable")?;
     if value.is_empty() {
-        return Ok([0; 32]);
+        return Ok(None);
     }
     let bytes = decode_hex(value.trim()).context("receipt state is invalid")?;
     bytes
         .try_into()
+        .map(Some)
         .map_err(|_| anyhow::anyhow!("receipt state is invalid"))
 }
 
-fn write_state(path: &PathBuf, value: &[u8; 32]) -> Result<()> {
+fn recover_chain(journal_path: &Path, state_path: &Path) -> Result<[u8; 32]> {
+    let checkpoint = read_state(state_path)?;
+    let mut checkpoint_seen = checkpoint.is_none_or(|value| value == [0; 32]);
+    let mut previous = [0; 32];
+    let mut journal = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(journal_path)
+        .context("receipt journal is unavailable")?;
+    let mut read_buffer = [0_u8; 8192];
+    let mut pending = Vec::new();
+    let mut offset = 0_u64;
+    let mut complete_offset = 0_u64;
+    loop {
+        let count = journal
+            .read(&mut read_buffer)
+            .context("receipt journal replay failed")?;
+        if count == 0 {
+            break;
+        }
+        for byte in &read_buffer[..count] {
+            offset += 1;
+            if *byte == b'\n' {
+                if pending.is_empty() {
+                    bail!("receipt journal contains an empty entry");
+                }
+                previous = validate_envelope(&pending, &previous)?;
+                checkpoint_seen |= checkpoint == Some(previous);
+                pending.clear();
+                complete_offset = offset;
+            } else {
+                if pending.len() >= MAX_RECEIPT_LINE_BYTES {
+                    bail!("receipt journal entry exceeds its bound");
+                }
+                pending.push(*byte);
+            }
+        }
+    }
+    if !pending.is_empty() {
+        pending.zeroize();
+        if checkpoint.is_some_and(|value| value != previous) {
+            bail!("receipt journal has an inconsistent truncated tail");
+        }
+        journal
+            .set_len(complete_offset)
+            .context("receipt journal tail recovery failed")?;
+        journal.sync_data().context("receipt journal sync failed")?;
+    }
+    if !checkpoint_seen {
+        bail!("receipt chain state is not present in the verified journal");
+    }
+    if checkpoint != Some(previous) {
+        write_state(state_path, &previous)?;
+    }
+    Ok(previous)
+}
+
+fn validate_envelope(line: &[u8], previous: &[u8; 32]) -> Result<[u8; 32]> {
+    let envelope: ReceiptEnvelope =
+        serde_json::from_slice(line).context("receipt journal entry is invalid")?;
+    let payload = serde_json::to_vec(&envelope.receipt).context("receipt encoding failed")?;
+    let mut hasher = Sha256::new();
+    hasher.update(previous);
+    hasher.update(payload);
+    let expected: [u8; 32] = hasher.finalize().into();
+    if envelope.chain != hex(&expected) {
+        bail!("receipt journal chain is invalid");
+    }
+    Ok(expected)
+}
+
+fn write_state(path: &Path, value: &[u8; 32]) -> Result<()> {
     let temporary = path.with_extension("tmp");
     if temporary.exists() {
         std::fs::remove_file(&temporary).context("stale receipt state update is unavailable")?;
     }
-    let mut file = open_private_append(&temporary)?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary)
+        .context("receipt state update is unavailable")?;
     file.write_all(hex(value).as_bytes())
         .context("receipt state update failed")?;
     file.sync_all().context("receipt state sync failed")?;
     drop(file);
-    std::fs::rename(&temporary, path).context("receipt state commit failed")
+    std::fs::rename(&temporary, path).context("receipt state commit failed")?;
+    sync_parent(path)
 }
 
-fn open_private_append(path: &PathBuf) -> Result<File> {
+fn sync_parent(path: &Path) -> Result<()> {
+    let parent = path.parent().context("receipt path has no parent")?;
+    File::open(parent)
+        .context("receipt directory is unavailable")?
+        .sync_all()
+        .context("receipt directory sync failed")
+}
+
+fn open_private_append(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -303,9 +408,15 @@ fn decode_hex(value: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
     use std::time::Duration;
 
-    use super::{DataPlaneReceipt, ReceiptJournal, ReceiptOutcome};
+    use sha2::{Digest as _, Sha256};
+
+    use super::{
+        DataPlaneReceipt, ReceiptEnvelope, ReceiptJournal, ReceiptOutcome, hex,
+        open_private_append, recover_chain, write_state,
+    };
     use crate::config::ReceiptConfig;
 
     #[tokio::test]
@@ -353,5 +464,126 @@ mod tests {
         ] {
             assert!(!output.contains(forbidden));
         }
+    }
+
+    #[test]
+    fn startup_replays_journal_and_repairs_a_stale_checkpoint() {
+        let directory = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+        let journal_path = directory.path().join("receipts.jsonl");
+        let state_path = directory.path().join("chain");
+        let first = sample_receipt("first");
+        let (first_line, first_chain) = envelope(&[0; 32], first);
+        let (second_line, second_chain) = envelope(&first_chain, sample_receipt("second"));
+        let mut journal =
+            open_private_append(&journal_path).unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .write_all(&[first_line, second_line].concat())
+            .unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .sync_data()
+            .unwrap_or_else(|error| panic!("{error}"));
+        write_state(&state_path, &first_chain).unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(
+            recover_chain(&journal_path, &state_path).unwrap_or_else(|error| panic!("{error}")),
+            second_chain
+        );
+        assert_eq!(
+            std::fs::read_to_string(state_path).unwrap_or_else(|error| panic!("{error}")),
+            hex(&second_chain)
+        );
+    }
+
+    #[test]
+    fn startup_truncates_only_an_uncheckpointed_partial_tail() {
+        let directory = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+        let journal_path = directory.path().join("receipts.jsonl");
+        let state_path = directory.path().join("chain");
+        let (line, chain) = envelope(&[0; 32], sample_receipt("complete"));
+        let mut journal =
+            open_private_append(&journal_path).unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .write_all(&[line.clone(), b"{\"receipt\":".to_vec()].concat())
+            .unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .sync_data()
+            .unwrap_or_else(|error| panic!("{error}"));
+        write_state(&state_path, &chain).unwrap_or_else(|error| panic!("{error}"));
+
+        assert_eq!(
+            recover_chain(&journal_path, &state_path).unwrap_or_else(|error| panic!("{error}")),
+            chain
+        );
+        assert_eq!(
+            std::fs::read(journal_path).unwrap_or_else(|error| panic!("{error}")),
+            line
+        );
+    }
+
+    #[test]
+    fn startup_rejects_invalid_chain_and_unrecognized_checkpoint() {
+        let directory = tempfile::tempdir().unwrap_or_else(|error| panic!("{error}"));
+        let journal_path = directory.path().join("receipts.jsonl");
+        let state_path = directory.path().join("chain");
+        let (mut line, _) = envelope(&[0; 32], sample_receipt("invalid"));
+        let index = line
+            .iter()
+            .position(|byte| *byte == b'a')
+            .unwrap_or_else(|| panic!("fixture contains no mutable chain byte"));
+        line[index] = b'b';
+        let mut journal =
+            open_private_append(&journal_path).unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .write_all(&line)
+            .unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .sync_data()
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(recover_chain(&journal_path, &state_path).is_err());
+
+        let other_journal = directory.path().join("other.jsonl");
+        let other_state = directory.path().join("other-chain");
+        let (valid, _) = envelope(&[0; 32], sample_receipt("valid"));
+        let mut journal =
+            open_private_append(&other_journal).unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .write_all(&valid)
+            .unwrap_or_else(|error| panic!("{error}"));
+        journal
+            .sync_data()
+            .unwrap_or_else(|error| panic!("{error}"));
+        write_state(&other_state, &[0x55; 32]).unwrap_or_else(|error| panic!("{error}"));
+        assert!(recover_chain(&other_journal, &other_state).is_err());
+    }
+
+    fn sample_receipt(capability: &str) -> DataPlaneReceipt {
+        DataPlaneReceipt {
+            realm: "realm-test".into(),
+            workload: "workload-test".into(),
+            capability: capability.into(),
+            service: "api".into(),
+            destination: "api.example.test".into(),
+            method: "GET".into(),
+            path: "/v1/profile".into(),
+            status: Some(200),
+            delivered_bytes: 12,
+            elapsed_ms: 3,
+            outcome: ReceiptOutcome::Completed,
+        }
+    }
+
+    fn envelope(previous: &[u8; 32], receipt: DataPlaneReceipt) -> (Vec<u8>, [u8; 32]) {
+        let payload = serde_json::to_vec(&receipt).unwrap_or_else(|error| panic!("{error}"));
+        let mut hasher = Sha256::new();
+        hasher.update(previous);
+        hasher.update(payload);
+        let chain: [u8; 32] = hasher.finalize().into();
+        let mut line = serde_json::to_vec(&ReceiptEnvelope {
+            receipt,
+            chain: hex(&chain),
+        })
+        .unwrap_or_else(|error| panic!("{error}"));
+        line.push(b'\n');
+        (line, chain)
     }
 }
