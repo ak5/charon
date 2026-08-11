@@ -30,6 +30,9 @@ export CHARON_CONFIG_PATH="$CHARON_FIXTURE_DIRECTORY/charon.toml"
 export CHARON_CA_CERTIFICATE_PATH="$CHARON_FIXTURE_DIRECTORY/ca.pem"
 export CHARON_CA_PRIVATE_KEY_PATH="$CHARON_FIXTURE_DIRECTORY/ca-key.pem"
 export CHARON_ROOT_CA_CERTIFICATE_PATH="$CHARON_FIXTURE_DIRECTORY/root-ca.pem"
+export CHARON_RECEIPT_STATE_PATH="$CHARON_FIXTURE_DIRECTORY/receipts"
+mkdir -p "$CHARON_RECEIPT_STATE_PATH"
+chmod 700 "$CHARON_RECEIPT_STATE_PATH"
 export CHARON_MANIFEST_DIRECTORY="$CHARON_FIXTURE_DIRECTORY/manifests"
 export CHARON_RUNTIME_UID="${CHARON_RUNTIME_UID:-$(id -u)}"
 
@@ -62,7 +65,7 @@ for manifest_file in "$CHARON_MANIFEST_DIRECTORY"/*; do
     fi
 done
 
-if grep -Eiq 'github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|fixture-secret|charon-placeholder' \
+if grep -Eiq 'github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|fixture-secret|\{\{charon\.' \
     "$evidence_dir/charon.log"; then
     printf 'credential-like or placeholder material leaked into Charon logs\n' >&2
     exit 1

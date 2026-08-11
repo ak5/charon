@@ -36,6 +36,11 @@ public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 max_ttl_seconds = 60
 clock_skew_seconds = 2
 
+[receipts]
+journal_path = "/var/lib/charon/receipts.jsonl"
+state_path = "/var/lib/charon/receipt-chain"
+queue_capacity = 1024
+
 [[capabilities]]
 name = "github-read-user"
 persona = "developer"
@@ -46,7 +51,20 @@ paths = ["/user"]
 [[services]]
 name = "github"
 hosts = ["api.github.com"]
-header = "authorization"
-placeholder = "Bearer charon-placeholder"
-value_template = "Bearer {secret}"
 secret_ref = "github/developer"
+
+[services.hydration]
+kind = "authorization"
+value_template = "Bearer {secret}"
+
+[services.response]
+compression = "identity-only"
+max_bytes = 16777216
+max_duration_seconds = 300
+idle_timeout_seconds = 30
+max_secret_bytes = 4096
+
+[services.response.body]
+mode = "buffered-structured"
+max_bytes = 1048576
+forbidden_fields = ["access_token", "refresh_token", "token", "signed_url"]

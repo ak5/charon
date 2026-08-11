@@ -296,6 +296,7 @@ mod tests {
                 max_ttl_seconds: 60,
                 clock_skew_seconds: 2,
             },
+            receipts: None,
             capabilities: vec![CapabilityPolicy {
                 name: "github-user".into(),
                 persona: "alice".into(),
@@ -306,10 +307,20 @@ mod tests {
             services: vec![ServicePolicy {
                 name: "github".into(),
                 hosts: vec!["api.github.com".into()],
-                header: "authorization".into(),
-                placeholder: "Bearer placeholder".into(),
-                value_template: "Bearer {secret}".into(),
+                hydration: crate::config::HydrationPolicy {
+                    sink: crate::broker::HydrationSink::Authorization,
+                    value_template: "Bearer {secret}".into(),
+                },
                 secret_ref: "github/alice".into(),
+                response: crate::config::ResponsePolicy {
+                    body: crate::broker::ResponseMode::TextStream,
+                    compression: crate::broker::CompressionPolicy::IdentityOnly,
+                    max_bytes: 16 * 1024 * 1024,
+                    max_duration_seconds: 30,
+                    idle_timeout_seconds: 10,
+                    max_secret_bytes: 4096,
+                },
+                transparent_listen: None,
             }],
         }
     }

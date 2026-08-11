@@ -257,6 +257,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "percent-encoding",
  "rcgen",
  "reqwest",
  "rustls",
@@ -270,6 +271,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
  "zeroize",
 ]
 

@@ -50,6 +50,8 @@ case "$registry_username" in
 esac
 
 cd "$deploy_dir"
+mkdir -p "$deploy_dir/receipts"
+chmod 700 "$deploy_dir/receipts"
 test -f runtime.env
 test -f "$next_compose"
 test -f "$next_config"

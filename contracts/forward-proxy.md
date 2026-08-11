@@ -49,10 +49,12 @@ secret-store adapter.
 
 ## Credential rendering
 
-Local service policy defines the injected header, optional exact placeholder,
-and opaque secret reference. Caller-supplied routing and framing headers cannot
-be injection targets. The resolved value is never returned to the workload,
-placed in a redirect, or included in logs or error responses.
+Local service policy defines a typed hydration sink, formatting rule, response
+mode, limits, and opaque provider reference. The workload supplies
+`{{charon.<capability>}}` in that sink; the reference must name the same
+capability as the signed manifest. Caller-supplied routing and framing headers
+cannot be injection targets. The resolved value is never returned to the
+workload, placed in a redirect, or included in logs, errors, or receipts.
 
 ## Responses
 
@@ -66,9 +68,10 @@ Charon intentionally exposes coarse outcomes:
 | `413` | configured request or response size limit exceeded |
 | `502` | authorized destination, egress, TLS, or secret-store dependency failed |
 
-Upstream response statuses otherwise pass through after hop-by-hop response
-headers are removed. No response distinguishes provider accounts, item
-existence, secret references, or secret values.
+Upstream response statuses otherwise pass through the policy-selected bounded
+streaming sanitizer described by `transparent-gateway.md`. No response
+distinguishes provider accounts, item existence, secret references, or secret
+values.
 
 ## Non-contracts
 

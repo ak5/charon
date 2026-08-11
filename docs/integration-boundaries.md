@@ -8,7 +8,8 @@ control plane. Integrations are explicit, versioned, and fail closed.
 
 | Boundary | Direction | Protocol and contract | Trust | Charon owns |
 | --- | --- | --- | --- | --- |
-| Workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, placeholder, size, redirect, replay, and expiry enforcement |
+| Workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, capability reference, size, redirect, replay, and expiry enforcement |
+| Transparent workload lane | Infra-routed workload → dedicated Charon listener | intercepted TCP/TLS; capability reference in one policy sink; [`transparent-gateway.md`](../contracts/transparent-gateway.md) | trusted only when isolated routing prevents spoofing and bypass | exact listener/service binding, SNI/authority agreement, capability, hydration, response mediation |
 | Identity issuer | control plane → workload → Charon | Ed25519 signed compact manifest; [`workload-claims.schema.json`](../contracts/workload-claims.schema.json) | trusted only to assert identity and capability | offline signature verification and independent concrete-operation policy |
 | Approval broker | control plane ↔ broker → identity issuer | normalized request and signed approval assertion; [`approval-broker.openapi.yaml`](../contracts/approval-broker.openapi.yaml) | trusted control-plane authorization component | outside Charon; cannot select destinations, secrets, or widen local policy |
 | Approval channel | broker ↔ Telegram/human | [`ApprovalChannel`](../contracts/approval-channel.md) presentation and opaque callback contract | trusted only for delivery and numeric actor/chat authentication | outside Charon; no decision, rule, assertion, or credential authority |
@@ -19,7 +20,7 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Destination | Charon → exact host | HTTPS on port 443, optionally through configured egress; literal loopback HTTP only for local fixtures | untrusted response source | credential injection after authorization; redirects disabled |
 | Upstream egress | Charon → proxy | HTTP(S) forward proxy with optional protected file-backed Basic auth | routing dependency, not an authorization source | exact destination authorization remains local |
 | PKI | operator → Charon/workload | offline root and one realm intermediate | operator trust boundary | exact-host leaf issuance; PKI never selects persona or capability |
-| Audit sink | Charon → logs | structured JSON events | may observe approved identifiers only | no headers, bodies, manifests, nonces, provider references, sessions, or keys |
+| Receipt journal | Charon → protected JSONL/state files | [`data-plane-receipt.schema.json`](../contracts/data-plane-receipt.schema.json) | local operator evidence | bounded metadata and delivery outcome; journal replay is authoritative and reconciles the checkpoint; no headers, queries, bodies, provider references, sessions, or keys |
 | Workload tool adapter | workload runtime ↔ local integration service | normalized operation, admission decision, and metadata-only receipt; schemas in [`contracts/`](../contracts/) | advisory inside the workload boundary unless isolated by OS identity and transport | outside Charon; cannot select destinations, capabilities, providers, or secrets |
 
 ## Workload protocol
@@ -32,6 +33,14 @@ outside configured policy, or credential rendering rule.
 OpenAPI does not model a general forward proxy or `CONNECT` tunnel accurately,
 so the workload boundary is specified by the manifest JSON Schema, the policy
 configuration, ADR 0001, ADR 0002, and protocol integration tests.
+
+Transparent mode does not trust a path-like “agent URL.” One listener is bound
+to one realm workload and one exact service. Infra makes that endpoint
+reachable only from the intended workload network namespace, redirects the
+exact destination traffic, rejects UDP/QUIC, and blocks every direct-egress
+alternative. The capability reference identifies policy, not the workload. A
+shared lane needs a future cryptographic workload transport; source IP alone is
+not sufficient identity.
 
 ## Issuer contract
 
@@ -122,6 +131,14 @@ After an admitted call finishes, the adapter emits a compact execution receipt
 asynchronously. The receipt excludes raw arguments and raw output. It is audit
 evidence, not authorization and not proof that a destination's semantic state
 changed. Charon independently records only its network-level outcome.
+
+There is no trustworthy generic tool-call correlation for transparent `git`,
+`gh`, `curl`, or SDK traffic because those clients do not carry a protected
+tool-operation identifier. Charon independently authorizes the realm workload,
+capability, destination, method, path, and request shape. A coincident
+identifier can aid investigation but never grants access. Hermes admission,
+Hermes human approval, Charon gateway authorization, network isolation, and
+workload-manifest issuance are separate controls.
 
 An in-process workload plugin remains part of the untrusted workload boundary.
 It cannot replace direct-egress denial or Charon's manifest and local policy

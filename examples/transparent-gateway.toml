@@ -1,0 +1,59 @@
+# Public, synthetic transparent-gateway example. Infra must route only the
+# bound workload's api.example.test:443 traffic to 127.0.0.1:8443, block direct
+# egress, reject UDP/QUIC, and install only the public CA certificate.
+listen = "127.0.0.1:3129"
+
+[realm]
+id = "example-agent"
+tenant = "example"
+persona = "example-agent"
+generation = 1
+
+[provider]
+kind = "environment"
+
+[tls]
+ca_certificate = "/run/charon-ca/ca.pem"
+ca_private_key = "/run/credentials/charon-ca-key.pem"
+
+[identity]
+issuer = "example-control-plane"
+audience = "charon"
+public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
+max_ttl_seconds = 60
+clock_skew_seconds = 2
+
+[receipts]
+journal_path = "/var/lib/charon/receipts.jsonl"
+state_path = "/var/lib/charon/receipt-chain"
+queue_capacity = 1024
+
+[[capabilities]]
+name = "example-api-read"
+persona = "example-agent"
+service = "example-api"
+methods = ["GET"]
+paths = ["/v1/profile"]
+
+[[services]]
+name = "example-api"
+hosts = ["api.example.test"]
+secret_ref = "CHARON_EXAMPLE_TOKEN"
+transparent_listen = "127.0.0.1:8443"
+
+[services.hydration]
+kind = "authorization"
+value_template = "Bearer {secret}"
+
+[services.response]
+compression = "identity-only"
+max_bytes = 16777216
+max_duration_seconds = 300
+idle_timeout_seconds = 30
+max_secret_bytes = 4096
+
+[services.response.body]
+mode = "structured-stream"
+format = "sse"
+max_record_bytes = 262144
+forbidden_fields = ["access_token", "refresh_token", "token", "signed_url"]

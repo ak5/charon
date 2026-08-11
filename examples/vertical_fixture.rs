@@ -239,6 +239,11 @@ public_key = "{public_key}"
 max_ttl_seconds = 60
 clock_skew_seconds = 2
 
+[receipts]
+journal_path = "/var/lib/charon/receipts/receipts.jsonl"
+state_path = "/var/lib/charon/receipts/chain"
+queue_capacity = 1024
+
 [[capabilities]]
 name = "github-read-user"
 persona = "vertical-developer"
@@ -249,10 +254,23 @@ paths = ["/user"]
 [[services]]
 name = "github"
 hosts = ["api.github.com"]
-header = "authorization"
-placeholder = "token charon-placeholder"
-value_template = "token {{secret}}"
 secret_ref = "github/vertical-developer"
+
+[services.hydration]
+kind = "authorization"
+value_template = "token {{secret}}"
+
+[services.response]
+compression = "identity-only"
+max_bytes = 16777216
+max_duration_seconds = 60
+idle_timeout_seconds = 15
+max_secret_bytes = 4096
+
+[services.response.body]
+mode = "buffered-structured"
+max_bytes = 1048576
+forbidden_fields = ["access_token", "refresh_token", "token", "signed_url"]
 "#
     )
 }

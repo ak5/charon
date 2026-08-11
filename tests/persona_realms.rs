@@ -119,6 +119,7 @@ fn realm_config(address: std::net::SocketAddr, realm: &str, tenant: &str, person
             max_ttl_seconds: 60,
             clock_skew_seconds: 0,
         },
+        receipts: None,
         capabilities: vec![CapabilityPolicy {
             name: "fixture-whoami".into(),
             persona: persona.into(),
@@ -129,10 +130,13 @@ fn realm_config(address: std::net::SocketAddr, realm: &str, tenant: &str, person
         services: vec![ServicePolicy {
             name: "fixture".into(),
             hosts: vec!["127.0.0.1".into()],
-            header: "authorization".into(),
-            placeholder: "Bearer public-placeholder".into(),
-            value_template: "Bearer {secret}".into(),
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
             secret_ref: format!("CHARON_FIXTURE_{}", persona.to_ascii_uppercase()),
+            response: charon::config::ResponsePolicy::text_stream(16 * 1024 * 1024, 30, 10, 4096),
+            transparent_listen: None,
         }],
     }
 }
@@ -162,7 +166,7 @@ async fn use_realm(
     client
         .get(format!("http://{upstream_address}/whoami"))
         .header("proxy-authorization", format!("Charon {manifest}"))
-        .header("authorization", "Bearer public-placeholder")
+        .header("authorization", "Bearer {{charon.fixture-whoami}}")
         .send()
         .await
         .map_err(Into::into)
@@ -215,7 +219,7 @@ async fn two_persona_realms_fail_closed_and_fail_independently() -> Result<()> {
         })?;
         let response = use_realm(alice, upstream_address, &manifest).await?;
         assert!(response.status().is_success());
-        assert_eq!(response.text().await?, "Bearer alice-fixture-value");
+        assert_eq!(response.text().await?, "Bearer [REDACTED]");
     }
 
     let cross_persona = token(Grant {
@@ -306,7 +310,7 @@ async fn two_persona_realms_fail_closed_and_fail_independently() -> Result<()> {
     })?;
     let response = use_realm(bob, upstream_address, &bob_independent).await?;
     assert!(response.status().is_success());
-    assert_eq!(response.text().await?, "Bearer bob-fixture-value");
+    assert_eq!(response.text().await?, "Bearer [REDACTED]");
 
     let readiness_bytes = reqwest::get(format!("http://{bob}/readyz"))
         .await?
