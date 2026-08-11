@@ -17,7 +17,8 @@ to persist memories, learned/custom skills, sessions, and other state there.
 | --- | --- |
 | Charon-Hermes plugin and admission service | Admit an exact semantic Hermes tool name and write metadata-only receipts. |
 | Hermes approval system | Inspect dangerous terminal commands and ask the Telegram operator for once/session/always/deny approval. Charon does not replace or bypass it. |
-| Charon forward proxy | Enforce signed workload identity and exact remote destination/method/path policy, then inject credentials without exposing them to Hermes. |
+| Charon explicit proxy | Enforce a signed single-use workload manifest and exact remote destination/method/path policy, then hydrate a capability reference without exposing the credential to Hermes. |
+| Charon transparent gateway | Independently authorize an Infra-isolated Hermes lane, capability reference, destination, request shape, and streamed response. Generic clients do not provide trustworthy tool-call correlation. |
 | Network isolation | Prevent Hermes from reaching remote services around Charon. Tool admission alone does not provide egress control. |
 | Workload identity issuer | Issue short-lived, single-use Charon manifests. Neither this plugin nor its policy stores or issues manifests. |
 

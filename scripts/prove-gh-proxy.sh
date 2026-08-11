@@ -7,5 +7,5 @@ set -eu
 
 HTTPS_PROXY="http://charon:${CHARON_WORKLOAD_MANIFEST}@${CHARON_PROXY_URL#http://}" \
 SSL_CERT_FILE="$CHARON_CA_CERTIFICATE" \
-GH_TOKEN="charon-placeholder" \
+GH_TOKEN='{{charon.github-read-user}}' \
 gh api user

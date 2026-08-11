@@ -8,23 +8,13 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use base64::Engine as _;
-use http::{HeaderName, HeaderValue};
 use serde::Deserialize;
+
+use crate::broker::{CompressionPolicy, HydrationSink, ResponseMode};
 
 const MAX_IDENTITY_TTL_SECONDS: u64 = 300;
 const MAX_CLOCK_SKEW_SECONDS: u64 = 30;
-const FORBIDDEN_INJECTION_HEADERS: [&str; 10] = [
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailer",
-    "transfer-encoding",
-    "upgrade",
-    "host",
-    "content-length",
-];
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Process configuration loaded from a TOML file.
 #[derive(Clone, Debug, Deserialize)]
@@ -42,10 +32,24 @@ pub struct Config {
     pub tls: Option<TlsConfig>,
     /// Signed workload-manifest verification policy.
     pub identity: IdentityConfig,
+    /// Optional metadata-only receipt journal. Required by transparent mode.
+    pub receipts: Option<ReceiptConfig>,
     /// Named capabilities that bind a persona to one service and operation set.
     pub capabilities: Vec<CapabilityPolicy>,
     /// Explicit credential-injection allowlist.
     pub services: Vec<ServicePolicy>,
+}
+
+/// Bounded metadata-only receipt journal configuration.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptConfig {
+    /// Absolute append-only JSONL journal path.
+    pub journal_path: PathBuf,
+    /// Absolute hash-chain state path.
+    pub state_path: PathBuf,
+    /// Maximum receipts waiting for durable append.
+    pub queue_capacity: usize,
 }
 
 /// Stable orchestrator-neutral ownership bound to one isolated Charon process.
@@ -162,15 +166,143 @@ pub struct ServicePolicy {
     pub name: String,
     /// Exact destination hostnames. Wildcards are intentionally unsupported.
     pub hosts: Vec<String>,
-    /// Request header whose placeholder may be replaced.
-    pub header: String,
-    /// Exact value the untrusted workload must send.
-    pub placeholder: String,
-    /// Rendered upstream value. Exactly one `{secret}` marker is required.
-    pub value_template: String,
+    /// Typed, policy-owned credential hydration rule.
+    pub hydration: HydrationPolicy,
     /// Credential provider key. The prototype environment provider treats this
     /// as an environment-variable name in the Charon process only.
     pub secret_ref: String,
+    /// Explicit response mediation and resource limits.
+    pub response: ResponsePolicy,
+    /// Optional dedicated IPv4 listener used for transparent TLS interception.
+    pub transparent_listen: Option<SocketAddr>,
+}
+
+/// One typed credential hydration rule.
+#[derive(Clone, Debug)]
+pub struct HydrationPolicy {
+    /// The only request location in which a reference may appear.
+    pub sink: HydrationSink,
+    /// Rendered upstream value with exactly one `{secret}` marker.
+    pub value_template: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+enum HydrationPolicyWire {
+    Authorization {
+        value_template: String,
+    },
+    Header {
+        name: String,
+        value_template: String,
+    },
+    Basic {
+        username: String,
+        value_template: String,
+    },
+    PathComponent {
+        index: usize,
+        value_template: String,
+    },
+    QueryParameter {
+        name: String,
+        value_template: String,
+    },
+    JsonField {
+        pointer: String,
+        value_template: String,
+    },
+    FormField {
+        name: String,
+        value_template: String,
+    },
+    GitSmartHttp {
+        username: String,
+        value_template: String,
+    },
+}
+
+impl<'de> Deserialize<'de> for HydrationPolicy {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let (sink, value_template) = match HydrationPolicyWire::deserialize(deserializer)? {
+            HydrationPolicyWire::Authorization { value_template } => {
+                (HydrationSink::Authorization, value_template)
+            }
+            HydrationPolicyWire::Header {
+                name,
+                value_template,
+            } => (HydrationSink::Header { name }, value_template),
+            HydrationPolicyWire::Basic {
+                username,
+                value_template,
+            } => (HydrationSink::Basic { username }, value_template),
+            HydrationPolicyWire::PathComponent {
+                index,
+                value_template,
+            } => (HydrationSink::PathComponent { index }, value_template),
+            HydrationPolicyWire::QueryParameter {
+                name,
+                value_template,
+            } => (HydrationSink::QueryParameter { name }, value_template),
+            HydrationPolicyWire::JsonField {
+                pointer,
+                value_template,
+            } => (HydrationSink::JsonField { pointer }, value_template),
+            HydrationPolicyWire::FormField {
+                name,
+                value_template,
+            } => (HydrationSink::FormField { name }, value_template),
+            HydrationPolicyWire::GitSmartHttp {
+                username,
+                value_template,
+            } => (HydrationSink::GitSmartHttp { username }, value_template),
+        };
+        Ok(Self {
+            sink,
+            value_template,
+        })
+    }
+}
+
+/// Explicit response streaming and sanitization policy.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResponsePolicy {
+    /// Semantic body mediation strategy.
+    pub body: ResponseMode,
+    /// Handling for content-encoded upstream bodies.
+    pub compression: CompressionPolicy,
+    /// Aggregate response byte limit.
+    pub max_bytes: usize,
+    /// Total upstream response lifetime in seconds.
+    pub max_duration_seconds: u64,
+    /// Maximum idle interval between body chunks in seconds.
+    pub idle_timeout_seconds: u64,
+    /// Maximum credential length accepted by the rolling sanitizer.
+    pub max_secret_bytes: usize,
+}
+
+impl ResponsePolicy {
+    /// Construct an identity-encoded rolling text-stream policy with explicit limits.
+    #[must_use]
+    pub const fn text_stream(
+        max_bytes: usize,
+        max_duration_seconds: u64,
+        idle_timeout_seconds: u64,
+        max_secret_bytes: usize,
+    ) -> Self {
+        Self {
+            body: ResponseMode::TextStream,
+            compression: CompressionPolicy::IdentityOnly,
+            max_bytes,
+            max_duration_seconds,
+            idle_timeout_seconds,
+            max_secret_bytes,
+        }
+    }
 }
 
 impl Config {
@@ -195,10 +327,20 @@ impl Config {
     ///
     /// Returns an error for empty, duplicate, wildcard, or otherwise ambiguous
     /// policy declarations.
+    #[allow(clippy::too_many_lines)]
     pub fn validate(&self) -> Result<()> {
         self.validate_realm()?;
         self.validate_identity()?;
         self.validate_upstream_proxy()?;
+        if let Some(receipts) = &self.receipts
+            && (!receipts.journal_path.is_absolute()
+                || !receipts.state_path.is_absolute()
+                || receipts.journal_path == receipts.state_path
+                || receipts.queue_capacity == 0
+                || receipts.queue_capacity > 65_536)
+        {
+            bail!("receipt journal configuration is invalid");
+        }
         if let Some(tls) = &self.tls
             && (!tls.ca_certificate.is_absolute() || !tls.ca_private_key.is_absolute())
         {
@@ -214,6 +356,7 @@ impl Config {
 
         let mut names = HashSet::new();
         let mut hosts = HashSet::new();
+        let mut transparent_listeners = HashSet::new();
         for service in &self.services {
             if !is_identifier(&service.name) || !names.insert(service.name.as_str()) {
                 bail!("duplicate service name: {}", service.name);
@@ -221,32 +364,40 @@ impl Config {
             if service.hosts.is_empty() {
                 bail!("service {} has no hosts", service.name);
             }
-            if service.value_template.matches("{secret}").count() != 1 {
+            if service.hydration.value_template.matches("{secret}").count() != 1
+                || service.hydration.value_template.len() > 1024
+            {
                 bail!(
                     "service {} value_template must contain one {{secret}}",
                     service.name
                 );
             }
-            if service.placeholder.contains("{secret}") {
+            service.hydration.sink.validate().with_context(|| {
+                format!("service {} has an invalid hydration sink", service.name)
+            })?;
+            if service.secret_ref.is_empty() || service.secret_ref.len() > 256 {
+                bail!("service {} has invalid credential policy", service.name);
+            }
+            validate_response_policy(service)?;
+            if service
+                .transparent_listen
+                .is_some_and(|address| !address.is_ipv4())
+            {
                 bail!(
-                    "service {} placeholder must not contain {{secret}}",
+                    "service {} transparent listener must use IPv4",
                     service.name
                 );
             }
-            let injection_header: HeaderName = service
-                .header
-                .parse()
-                .with_context(|| format!("service {} has an invalid header", service.name))?;
-            if FORBIDDEN_INJECTION_HEADERS.contains(&injection_header.as_str()) {
-                bail!("service {} uses a forbidden injection header", service.name);
-            }
-            HeaderValue::from_str(&service.placeholder)
-                .with_context(|| format!("service {} has an invalid placeholder", service.name))?;
-            if service.placeholder.is_empty()
-                || service.secret_ref.is_empty()
-                || service.secret_ref.len() > 256
+            if let Some(address) = service.transparent_listen
+                && (self.receipts.is_none()
+                    || service.hosts.len() != 1
+                    || address == self.listen
+                    || !transparent_listeners.insert(address))
             {
-                bail!("service {} has invalid credential policy", service.name);
+                bail!(
+                    "service {} has an invalid transparent listener",
+                    service.name
+                );
             }
             if matches!(&self.provider, ProviderConfig::Environment)
                 && !is_environment_reference(&service.secret_ref)
@@ -486,6 +637,69 @@ fn is_uuid(value: &str) -> bool {
         })
 }
 
+fn validate_response_policy(service: &ServicePolicy) -> Result<()> {
+    let policy = &service.response;
+    if policy.max_bytes == 0
+        || policy.max_bytes > MAX_RESPONSE_BYTES
+        || policy.max_duration_seconds == 0
+        || policy.max_duration_seconds > 3600
+        || policy.idle_timeout_seconds == 0
+        || policy.idle_timeout_seconds > 300
+        || policy.max_secret_bytes < 8
+        || policy.max_secret_bytes > 16 * 1024
+    {
+        bail!("service {} has invalid response limits", service.name);
+    }
+    match &policy.body {
+        ResponseMode::StructuredStream {
+            max_record_bytes,
+            forbidden_fields,
+            ..
+        } => {
+            if *max_record_bytes == 0
+                || *max_record_bytes > policy.max_bytes
+                || forbidden_fields.iter().any(String::is_empty)
+            {
+                bail!(
+                    "service {} has invalid structured stream policy",
+                    service.name
+                );
+            }
+        }
+        ResponseMode::BufferedStructured {
+            max_bytes,
+            forbidden_fields,
+        } => {
+            if *max_bytes == 0
+                || *max_bytes > policy.max_bytes
+                || forbidden_fields.iter().any(String::is_empty)
+            {
+                bail!(
+                    "service {} has invalid buffered response policy",
+                    service.name
+                );
+            }
+        }
+        ResponseMode::OpaqueStream { content_types } => {
+            if content_types.is_empty()
+                || content_types
+                    .iter()
+                    .any(|value| value.is_empty() || value.contains('*'))
+            {
+                bail!("service {} has invalid opaque content types", service.name);
+            }
+        }
+        ResponseMode::TextStream => {}
+    }
+    if policy.compression == CompressionPolicy::Opaque {
+        bail!(
+            "service {} requests unsupported opaque compression",
+            service.name
+        );
+    }
+    Ok(())
+}
+
 fn is_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -534,9 +748,10 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::{
-        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ServicePolicy,
-        UpstreamProxyConfig, VaultItemMapping, VaultwardenConfig,
+        CapabilityPolicy, Config, HydrationPolicy, IdentityConfig, ProviderConfig, RealmConfig,
+        ResponsePolicy, ServicePolicy, UpstreamProxyConfig, VaultItemMapping, VaultwardenConfig,
     };
+    use crate::broker::{CompressionPolicy, HydrationSink, ResponseMode};
 
     fn config() -> Config {
         Config {
@@ -563,6 +778,7 @@ mod tests {
                 max_ttl_seconds: 60,
                 clock_skew_seconds: 2,
             },
+            receipts: None,
             capabilities: vec![CapabilityPolicy {
                 name: "github-user".into(),
                 persona: "developer".into(),
@@ -573,10 +789,20 @@ mod tests {
             services: vec![ServicePolicy {
                 name: "github".into(),
                 hosts: vec!["api.github.com".into()],
-                header: "authorization".into(),
-                placeholder: "Bearer charon-placeholder".into(),
-                value_template: "Bearer {secret}".into(),
+                hydration: HydrationPolicy {
+                    sink: HydrationSink::Authorization,
+                    value_template: "Bearer {secret}".into(),
+                },
                 secret_ref: "CHARON_GITHUB_TOKEN".into(),
+                response: ResponsePolicy {
+                    body: ResponseMode::TextStream,
+                    compression: CompressionPolicy::IdentityOnly,
+                    max_bytes: 16 * 1024 * 1024,
+                    max_duration_seconds: 30,
+                    idle_timeout_seconds: 10,
+                    max_secret_bytes: 4096,
+                },
+                transparent_listen: None,
             }],
         }
     }
@@ -604,6 +830,31 @@ mod tests {
         let mut empty_label = config();
         empty_label.services[0].hosts = vec!["api..github.com".into()];
         assert!(empty_label.validate().is_err());
+    }
+
+    #[test]
+    fn unknown_hydration_fields_and_ipv6_transparent_listeners_are_rejected() {
+        assert!(
+            toml::from_str::<HydrationPolicy>(
+                "kind = 'authorization'\nvalue_template = 'Bearer {secret}'\nlegacy = 'x'"
+            )
+            .is_err()
+        );
+
+        let mut ipv6 = config();
+        ipv6.services[0].transparent_listen = Some(
+            "[::1]:8443"
+                .parse()
+                .unwrap_or_else(|error| panic!("{error}")),
+        );
+        assert!(ipv6.validate().is_err());
+
+        let mut compressed_opaque = config();
+        compressed_opaque.services[0].response.body = ResponseMode::OpaqueStream {
+            content_types: vec!["application/octet-stream".into()],
+        };
+        compressed_opaque.services[0].response.compression = CompressionPolicy::Opaque;
+        assert!(compressed_opaque.validate().is_err());
     }
 
     #[test]
@@ -662,12 +913,14 @@ mod tests {
         assert!(excessive_skew.validate().is_err());
 
         let mut unsafe_header = config();
-        unsafe_header.services[0].header = "host".into();
+        unsafe_header.services[0].hydration.sink = HydrationSink::Header {
+            name: "host".into(),
+        };
         assert!(unsafe_header.validate().is_err());
 
-        let mut invalid_placeholder = config();
-        invalid_placeholder.services[0].placeholder = "Bearer value\r\ninjected: true".into();
-        assert!(invalid_placeholder.validate().is_err());
+        let mut invalid_template = config();
+        invalid_template.services[0].hydration.value_template = "Bearer static".into();
+        assert!(invalid_template.validate().is_err());
 
         let mut ambient_environment = config();
         ambient_environment.services[0].secret_ref = "AWS_SECRET_ACCESS_KEY".into();

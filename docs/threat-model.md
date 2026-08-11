@@ -24,6 +24,10 @@ capability without placing the underlying credential in that workload.
 - **Workload identity issuer:** an integrating control plane owns an Ed25519
   private signing key and issues short-lived, single-use manifests. Charon owns
   only the public key and never queries control-plane state from the data plane.
+- **Transparent workload lane:** an Infra-owned network namespace and dedicated
+  listener bind one realm workload to one exact service. This is an identity
+  boundary only while other workloads cannot reach or spoof it and the
+  workload has no direct-egress route.
 - **Human approval broker:** optional external control-plane component that
   validates normalized requests, persists bounded rules and terminal decisions,
   authenticates approval-channel events, and signs short-lived assertions for
@@ -57,7 +61,8 @@ capability without placing the underlying credential in that workload.
 1. The workload never receives the real credential.
 2. Direct workload internet access is denied; otherwise it can bypass Charon.
 3. Policies use exact destination hosts and caller-independent secret references.
-4. A credential is injected only when the expected public placeholder is present.
+4. A credential is injected only when the canonical public capability reference
+   is present in its policy-declared sink.
 5. Redirects are disabled so credentials cannot cross authorization boundaries.
 6. Hop-by-hop and proxy-authorization headers are not forwarded.
 7. Forwarded-request audit events contain service, host, method, path, status,
@@ -153,6 +158,33 @@ capability without placing the underlying credential in that workload.
     browser tools; newly introduced, unclassified, or policy-omitted names fail
     closed. Charon semantic admission does not replace Hermes command approval,
     Charon proxy enforcement, workload-manifest issuance, or network isolation.
+31. Capability references use canonical `{{charon.<capability>}}` syntax and
+    identify local policy, never a provider or secret. Charon accepts one only
+    from the configured Authorization, named header, Basic, Git smart-HTTP,
+    path, query, JSON, or form sink. Unknown, malformed, nested, concatenated,
+    and misplaced references fail before credential resolution.
+32. A transparent listener binds exactly one service and DNS hostname. TLS SNI,
+    HTTP authority, listener destination, capability service, persona, method,
+    and path must agree. URL paths and source IPs do not authenticate a
+    workload.
+33. Authorized service DNS is exact, IPv4-only, and pinned after the first
+    accepted process-lifetime resolution. IPv6 listeners and answers are
+    rejected. Charon has no UDP or HTTP/3 transport; Infra rejects UDP/443 and
+    blocks direct egress so QUIC cannot bypass mediation.
+34. Response policy explicitly selects structured SSE/NDJSON streaming,
+    bounded JSON buffering, rolling text streaming, or allowlisted opaque
+    streaming. Authentication, session, and framing headers are removed first.
+35. Compression is identity-only or rejected. Opaque compressed response
+    policy is reserved and fails validation until bounded decompression and
+    sanitization exist. WebSocket upgrade is denied. Sanitization failure after
+    partial delivery stops the stream without appending upstream details.
+36. Data-plane receipts contain only the closed metadata schema. New requests
+    fail before resolution when the bounded queue or writer is unavailable.
+    The hash chain is meaningful only relative to an independently retained
+    checkpoint; it is neither a signature nor evidence against a compromised
+    Charon process. Startup replays the bounded journal as the source of truth,
+    reconciles a stale checkpoint, and rejects an invalid chain or unrecognized
+    checkpoint. Journal data is synced before checkpoint replacement.
 
 ## Known milestone-0 limitations
 
@@ -187,3 +219,9 @@ capability without placing the underlying credential in that workload.
   provide an operator boundary only when the service runs under an identity the
   workload cannot impersonate. Its hash-chained journal is tamper-evident, not
   digitally signed.
+- Transparent listener identity depends on Infra isolation and is weaker than
+  a signed per-request manifest. Generic clients cannot securely correlate a
+  network request to one Hermes tool call, so Charon authorizes it independently.
+- Structured request hydration buffers JSON and form bodies to the request
+  limit. WebSockets, IPv6, UDP, and QUIC are denied rather than partially
+  supported.

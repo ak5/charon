@@ -29,7 +29,18 @@ paths = ["/demo"]
 [[services]]
 name = "local-api"
 hosts = ["127.0.0.1"]
-header = "authorization"
-placeholder = "Bearer charon-placeholder"
-value_template = "Bearer {secret}"
 secret_ref = "CHARON_DEMO_TOKEN"
+
+[services.hydration]
+kind = "authorization"
+value_template = "Bearer {secret}"
+
+[services.response]
+compression = "identity-only"
+max_bytes = 16777216
+max_duration_seconds = 30
+idle_timeout_seconds = 10
+max_secret_bytes = 4096
+
+[services.response.body]
+mode = "text-stream"
