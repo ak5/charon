@@ -73,6 +73,14 @@ receives approval requests, decisions, rules, assertions, callback tokens, bot
 tokens, or presentation text. ADR 0005 and the approval artifacts in
 [`contracts/`](../contracts/) define this separate control-plane boundary.
 
+Resident-agent semantic approval uses the same grant engine but terminates at a
+local admission decision; it cannot manufacture a capability or skip Charon's
+independent network authorization. Session coding harnesses keep their native
+inline approval systems. The Telegram process and broker are separate optional
+processes joined by a protected Unix socket: the broker has durable state and
+the assertion key but no Telegram token, while the adapter has the token and
+immutable private-user binding but no rule or assertion authority.
+
 ## Provider adapter contract
 
 `SecretProvider` is the in-process adapter boundary. A provider receives only an
