@@ -35,7 +35,7 @@
       "properties": {
         "channel": { "const": "telegram" },
         "user_id": { "$ref": "#/$defs/numericIdentifier" },
-        "chat_id": { "$ref": "#/$defs/signedNumericIdentifier" }
+        "chat_id": { "$ref": "#/$defs/numericIdentifier" }
       }
     },
     "rule_id": { "$ref": "#/$defs/nonce" },
@@ -91,10 +91,6 @@
     "numericIdentifier": {
       "type": "string",
       "pattern": "^[0-9]{1,20}$"
-    },
-    "signedNumericIdentifier": {
-      "type": "string",
-      "pattern": "^-?[0-9]{1,20}$"
     },
     "timestamp": {
       "type": "integer",

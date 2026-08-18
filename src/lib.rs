@@ -1,5 +1,6 @@
 //! Charon's configuration, credential-provider, and HTTP proxy primitives.
 
+pub mod approval;
 pub mod broker;
 pub mod ca;
 pub mod config;
