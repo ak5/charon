@@ -55,7 +55,8 @@ Every callback contains only an opaque random callback token. The approval
 broker resolves that token to one pending request and verifies:
 
 - callback token is single-use and unexpired;
-- Telegram numeric user and chat IDs match the operator allowlist;
+- Telegram reports a private chat and its numeric actor and chat IDs both equal
+  the adapter's immutable `CHARON_TELEGRAM_USER_ID`;
 - pending request ID and stored request digest match;
 - message is the current pending message;
 - requested grant is permitted for the action and risk tier; and
