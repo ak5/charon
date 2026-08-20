@@ -26,8 +26,8 @@ integrating control plane and its workload-identity issuer:
 3. The broker atomically evaluates durable, revocable reusable rules.
 4. If no rule applies, the broker sends a redacted presentation through an
    `ApprovalChannel`.
-5. An allowlisted numeric Telegram user/chat may deny or choose one of the
-   broker-provided bounded grant options.
+5. The one statically configured numeric Telegram private-chat user may deny or
+   choose one of the broker-provided bounded grant options.
 6. The broker records a terminal decision, optionally creates one structured
    rule, and signs a short-lived approval assertion with a dedicated Ed25519
    key.
@@ -64,8 +64,8 @@ content is non-reusable and requires a higher-risk allow-once confirmation.
   authenticate channel events, persist decisions, enforce expiry/revocation,
   rate-limit prompts, and protect its signing key.
 - **Approval channel:** trusted only to deliver a presentation and authenticate
-  channel-native numeric actor/conversation IDs. It has no rule or assertion
-  authority.
+  the one statically configured private user/chat equality invariant. It has no
+  rule or assertion authority.
 - **Human approver:** trusted within an operator-defined tenant/persona/risk
   scope. Account takeover remains an external authorization risk.
 - **Identity issuer:** trusts the broker's dedicated public key but must recheck
@@ -118,12 +118,22 @@ change risk classification or the set of buttons presented.
 
 ## Telegram lifecycle
 
-Telegram authorization uses operator-configured numeric user and chat IDs.
-Usernames and display names are presentation-only. Bot-token rotation preserves
-no pending callback tokens. Bot removal, account recovery, or chat migration
-activates emergency disable until an administrator updates the allowlist,
-rotates the bot token, invalidates pending requests, and explicitly re-enables
-issuance.
+The adapter requires `CHARON_TELEGRAM_BOT_TOKEN` and one positive numeric
+`CHARON_TELEGRAM_USER_ID` at startup. Every accepted update must be a private
+chat whose `from.id` and `chat.id` both equal that configured ID. Usernames,
+display names, groups, channels, lists, pairing, first-user-wins behavior, and
+runtime rebinding are unsupported. Changing either value requires restart.
+Bot-token rotation preserves no pending callback tokens. Bot removal, account
+recovery, or chat migration activates emergency disable until an administrator
+replaces startup configuration, rotates the bot token, invalidates pending
+requests, restarts the adapter, and explicitly re-enables issuance.
+
+The approval engine has two consumers. Capability approval returns a signed
+assertion to an identity issuer, which rechecks lifecycle and policy state and
+mints a fresh single-use Charon manifest. Semantic resident-agent tool approval
+returns a bounded decision to the local admission service and never creates a
+credential capability or bypasses Charon gateway authorization. Session coding
+harnesses retain their native inline approval systems.
 
 The bot token is a channel credential, never a secret-store backend for Charon.
 
