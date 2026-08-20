@@ -33,8 +33,9 @@ capability without placing the underlying credential in that workload.
   authenticates approval-channel events, and signs short-lived assertions for
   the workload identity issuer. Charon never calls it.
 - **Approval channel and human:** Telegram is the first presentation adapter.
-  Numeric user/chat allowlists authenticate the human boundary; usernames and
-  display text do not. The channel cannot create rules or assertions.
+  One immutable positive numeric user ID authenticates a private chat only when
+  actor ID, chat ID, and configured ID are equal; usernames and display text do
+  not. The channel cannot create rules or assertions.
 - **Persona realm:** one Charon process/container, Vaultwarden identity/session,
   configuration, cache, listener, runtime filesystem, and delegated
   intermediate CA per control-plane persona. No realm can read another realm's
@@ -144,7 +145,7 @@ capability without placing the underlying credential in that workload.
     cannot contain wildcards or natural-language predicates. Critical and
     unknown operations cannot receive reusable approval. Telegram callbacks are
     opaque, random, single-use, expiring, and bound server-side to one pending
-    request and numeric allowlisted actor/chat.
+    request and the immutable equal private actor/chat ID.
 28. Workload tool adapters submit only tool name, classification, argument-key
     names, identifiers, and a digest of canonical arguments for admission. They
     exclude raw arguments, commands, credentials, manifests, and provider
