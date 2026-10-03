@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/ak5/charon/actions/workflows/ci.yml"><img src="https://github.com/ak5/charon/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/ak5/charon/pkgs/container/charon"><img src="https://img.shields.io/badge/container-ghcr.io%2Fak5%2Fcharon-blue" alt="Container image"></a>
-  <a href="https://github.com/ak5/charon/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.97%2B-orange" alt="Rust 1.97 or newer"></a>
+  <a href="https://github.com/ak5/charon/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.99%2B-orange" alt="Rust 1.99 or newer"></a>
   <a href="https://github.com/ak5/charon/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ak5/charon" alt="MIT license"></a>
 </p>
 
@@ -16,7 +16,8 @@
 </p>
 
 Charon is a transparent gateway and forward proxy that adds credentials to
-approved outbound requests.
+approved outbound requests. It also forwards secretless and caller-authenticated
+traffic through an exclusive workload gateway for ordinary proxy clients.
 It lets a workload call an API without putting the API credential in that
 workload's environment, filesystem, or container image.
 
@@ -25,7 +26,7 @@ narrowly scoped access to an authenticated API without placing the long-lived
 credential inside the agent runtime. The same model works for CLIs, builds,
 development containers, and other programs.
 
-The workload sends an opaque capability reference instead of a real credential. Charon
+For credential mediation, the workload sends an opaque capability reference instead of a real credential. Charon
 checks authorization, matches the request against local policy, obtains the
 credential from the configured secret store, and hydrates the reference only in
 the request sent upstream.
@@ -51,13 +52,13 @@ anything that compromises it.
 Charon moves the credential into a smaller, separately operated process. A
 request is allowed only when all of these agree:
 
-- a signed, short-lived, single-use workload manifest in explicit-proxy mode,
-  or an Infra-isolated listener bound to one workload in transparent mode;
+- a signed, short-lived, single-use manifest in signed proxy mode, or an
+  Infra-isolated listener bound to one workload in transparent/exclusive mode;
 - a named capability in Charon's configuration; and
 - the actual destination hostname, HTTP method, and path.
 
 The workload cannot choose a secret, a secret-store item, or an unconfigured
-destination. Charon does not return credentials to workloads and does not
+destination. Charon does not return brokered credentials to workloads and does not
 follow redirects after adding one.
 
 Applications keep using their ordinary credential settings. The configured
@@ -91,7 +92,7 @@ identifiers supplied by the issuer. They are integration context, not secret
 selectors or core Charon concepts. This part of the public contract is under
 review before 1.0.
 
-## How a request works
+## How a signed credential request works
 
 1. A trusted issuer gives the workload a signed manifest for a named
    capability.
@@ -118,7 +119,7 @@ the Infra routing boundary. Charon's ordinary health endpoints are described by
 
 ## Development
 
-The project requires Rust 1.97 or newer. [mise](https://mise.jdx.dev/) is
+The project requires Rust 1.99 or newer. [mise](https://mise.jdx.dev/) is
 optional; it installs the pinned toolchain and provides short names for common
 development commands.
 
@@ -240,3 +241,12 @@ mise run check
 ## License
 
 Charon is licensed under the [MIT License](LICENSE).
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](contracts/workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

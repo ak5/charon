@@ -8,7 +8,8 @@ control plane. Integrations are explicit, versioned, and fail closed.
 
 | Boundary | Direction | Protocol and contract | Trust | Charon owns |
 | --- | --- | --- | --- | --- |
-| Workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, capability reference, size, redirect, replay, and expiry enforcement |
+| Exclusive workload | workload → Charon | dedicated explicit HTTP proxy / intercepted CONNECT; fixed realm/workload | Infra network isolation | exact host/method/path grants, typed header/Basic sinks, caller-session policy, metadata-only receipts; no manifest |
+| Signed workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, capability reference, size, redirect, replay, and expiry enforcement |
 | Transparent workload lane | Infra-routed workload → dedicated Charon listener | intercepted TCP/TLS; capability reference in one policy sink; [`transparent-gateway.md`](../contracts/transparent-gateway.md) | trusted only when isolated routing prevents spoofing and bypass | exact listener/service binding, SNI/authority agreement, capability, hydration, response mediation |
 | Identity issuer | control plane → workload → Charon | Ed25519 signed compact manifest; [`workload-claims.schema.json`](../contracts/workload-claims.schema.json) | trusted only to assert identity and capability | offline signature verification and independent concrete-operation policy |
 | Approval broker | control plane ↔ broker → identity issuer | normalized request and signed approval assertion; [`approval-broker.openapi.yaml`](../contracts/approval-broker.openapi.yaml) | trusted control-plane authorization component | outside Charon; cannot select destinations, secrets, or widen local policy |
@@ -25,7 +26,7 @@ control plane. Integrations are explicit, versioned, and fail closed.
 
 ## Workload protocol
 
-The workload sends a normal absolute-form HTTP proxy request, or an HTTP
+In signed proxy mode, the workload sends a normal absolute-form HTTP proxy request, or an HTTP
 `CONNECT` request followed by TLS. It supplies a signed manifest but cannot
 select a realm, provider, provider account, item, secret reference, destination
 outside configured policy, or credential rendering rule.
@@ -68,9 +69,10 @@ approval assertion to the identity issuer.
 
 The issuer verifies and consumes that assertion, rechecks the current
 tenant/persona/workspace/lease tuple and policy generation, and mints one fresh
-single-use Charon manifest. Charon never calls the broker or Telegram and never
-receives approval requests, decisions, rules, assertions, callback tokens, bot
-tokens, or presentation text. ADR 0005 and the approval artifacts in
+single-use Charon manifest. The data plane never calls the broker and never
+receives control-plane approval requests, decisions, rules, assertions, callback
+tokens, approval-channel bot tokens, or presentation text. Caller-owned Telegram network requests are a
+separate exclusive forwarding route. ADR 0005 and the approval artifacts in
 [`contracts/`](../contracts/) define this separate control-plane boundary.
 
 Resident-agent semantic approval uses the same grant engine but terminates at a
@@ -153,3 +155,12 @@ It cannot replace direct-egress denial or Charon's manifest and local policy
 checks. A deployment that needs receipts resistant to workload compromise must
 place execution and receipt signing behind an independently isolated tool
 gateway.
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](../contracts/workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

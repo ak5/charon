@@ -1,5 +1,5 @@
 [tools]
-rust = "1.97.1"
+rust = { version = "1.99.0", profile = "minimal", components = ["clippy", "rustfmt"] }
 python = "3.12.10"
 "github:EmbarkStudios/cargo-deny" = "0.20.2"
 

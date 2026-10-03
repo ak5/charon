@@ -2,7 +2,7 @@
 name = "charon"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.99"
 description = "Credential-injecting forward proxy for AI agents and other workloads"
 license = "MIT"
 repository = "https://github.com/ak5/charon"
@@ -24,7 +24,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
