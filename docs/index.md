@@ -6,6 +6,10 @@ Start with the document that owns the question you are trying to answer.
 
 - [README](../README.md): product overview and fastest development path.
 - [Deployment](deployment.md): deployment configuration and operating steps.
+- [Hermes single outbound gateway](hermes-gateway.md): exclusive-workload
+  explicit proxy, exact destination inventory and deployment verification.
+- [Workload gateway contract](../contracts/workload-gateway.md): ordinary client
+  CONNECT, secretless forwarding and typed credential routes.
 - [Transparent gateway contract](../contracts/transparent-gateway.md):
   capability references, typed hydration, streaming mediation, and routing.
 - [Approval broker operations](approval-broker-operations.md): approval-broker
@@ -35,5 +39,7 @@ Start with the document that owns the question you are trying to answer.
   security-reporting policy.
 - [Repository conventions](conventions.md): commands, repository shape,
   documentation ownership, scratch space, and bootstrap choices.
+- [Exclusive gateway implementation review](security-review-workload-gateway.md):
+  reviewed boundaries, regression evidence and deployment limitations.
 - [Security audit](security-audit-2026-07-27.md): current audit evidence and
   residual risks.

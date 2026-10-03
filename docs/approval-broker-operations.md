@@ -13,12 +13,15 @@ access.
 3. Provision transactional durable storage for requests, callback hashes,
    decisions, rules, assertion nonces, rate limits, emergency generation, and
    audit correlation. Encrypt storage and backups with operator-managed keys.
-4. Create a Telegram bot and store its token in the broker's protected runtime
-   secret mechanism. Do not place it in Charon, workload images, repository
-   settings, command arguments, logs, or messages.
-5. Configure exact Telegram numeric user and chat IDs. Verify IDs through an
-   authenticated enrollment procedure; never copy authorization from a username
-   or display name.
+4. Create a Telegram bot with BotFather and inject its token only into the
+   separate adapter as `CHARON_TELEGRAM_BOT_TOKEN`. Never print the token or
+   place it in the broker, Charon, workload images, repository settings, command
+   arguments, logs, probes, receipts, or messages.
+5. Set `CHARON_TELEGRAM_USER_ID` to one positive numeric user ID. `@userinfobot`
+   can help discover it, but is an unrelated third-party bot: never send that
+   bot secrets or private content. Do not authorize usernames, display names,
+   groups, channels, lists, pairing, or first-user-wins behavior. Open the
+   Charon bot's private chat and press Start before testing delivery.
 6. Load an operator-owned action/risk registry. Unknown actions default to
    critical and offer only deny or allow once.
 7. Start with emergency disable enabled. Exercise delivery, callback expiry,
@@ -34,7 +37,7 @@ access.
 - Session rules reference an active workspace lease and inactivity deadline.
 - Assertion nonce consumption is atomic at the issuer.
 - Prompt and callback rate limits are enforced per issuer, tenant, workload,
-  action, user, and chat.
+  action and the fixed equal private user/chat ID.
 - Audit sinks contain approved identifiers and digests, never request commands
   when classified sensitive, callback tokens, assertions, keys, bot tokens,
   credentials, provider references, or message bodies.
@@ -62,9 +65,11 @@ matches continue according to their own bounds.
 1. Enable emergency disable.
 2. Invalidate all pending callback tokens and terminally mark their messages
    when possible.
-3. Rotate the Telegram bot token and protected runtime value.
-4. Reverify bot identity, numeric allowlists, delivery, callback binding, and
-   terminal message edits.
+3. Rotate `CHARON_TELEGRAM_BOT_TOKEN` and restart the adapter. Changing
+   `CHARON_TELEGRAM_USER_ID` likewise requires a restart; there is no runtime
+   mutation path.
+4. Reverify bot identity, private user/chat equality, delivery, callback
+   binding, and terminal message edits.
 5. Increment emergency generation and explicitly re-enable issuance.
 
 ## Account recovery or chat migration
@@ -74,7 +79,7 @@ as an authorization incident:
 
 1. Enable emergency disable.
 2. Revoke affected rules and invalidate pending requests.
-3. Remove old numeric user/chat IDs.
+3. Replace the configured numeric user ID and restart the adapter.
 4. Complete an out-of-band operator identity check.
 5. Enroll new numeric IDs and rotate the bot token when exposure is possible.
 6. Review audit records from the last known-good human authentication event.

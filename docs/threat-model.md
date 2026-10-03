@@ -33,8 +33,9 @@ capability without placing the underlying credential in that workload.
   authenticates approval-channel events, and signs short-lived assertions for
   the workload identity issuer. Charon never calls it.
 - **Approval channel and human:** Telegram is the first presentation adapter.
-  Numeric user/chat allowlists authenticate the human boundary; usernames and
-  display text do not. The channel cannot create rules or assertions.
+  One immutable positive numeric user ID authenticates a private chat only when
+  actor ID, chat ID, and configured ID are equal; usernames and display text do
+  not. The channel cannot create rules or assertions.
 - **Persona realm:** one Charon process/container, Vaultwarden identity/session,
   configuration, cache, listener, runtime filesystem, and delegated
   intermediate CA per control-plane persona. No realm can read another realm's
@@ -58,10 +59,11 @@ capability without placing the underlying credential in that workload.
 
 ## Security invariants
 
-1. The workload never receives the real credential.
+1. The workload never receives a Charon-brokered credential. Caller-owned
+   OAuth/session tokens on exclusive forwarding routes remain client-owned.
 2. Direct workload internet access is denied; otherwise it can bypass Charon.
 3. Policies use exact destination hosts and caller-independent secret references.
-4. A credential is injected only when the canonical public capability reference
+4. A brokered credential is injected only when the canonical public capability reference
    is present in its policy-declared sink.
 5. Redirects are disabled so credentials cannot cross authorization boundaries.
 6. Hop-by-hop and proxy-authorization headers are not forwarded.
@@ -73,7 +75,7 @@ capability without placing the underlying credential in that workload.
 9. Deployment selects a full commit-SHA image tag, verifies the running OCI
    revision, health, and credential-less denial, and restores the prior image
    and project-owned configuration on failure. Mutable image tags are not used.
-10. Every forwarded request carries a signed manifest bound to the exact
+10. Each signed-mode forwarded request carries a manifest bound to the exact
     issuer, audience, workload, persona, named capability, validity window, and
     single-use nonce. Identity and operation authorization complete before
     credential resolution.
@@ -91,8 +93,9 @@ capability without placing the underlying credential in that workload.
 13. The vertical test workload joins only an internal Docker network. Charon
     alone joins the upstream network and chains through the configured Squid
     egress, so a workload cannot bypass policy with a direct connection.
-14. Request and response bodies stream through backpressured counted adapters
-    with independent 16 MiB aggregate limits. Declared oversize requests fail
+14. Signed/transparent request bodies stream through backpressured counted
+    adapters with a 16 MiB aggregate limit; response bounds are policy-selected.
+    Exclusive gateway uploads/downloads have explicit independent route limits. Declared oversize requests fail
     before identity and provider work; declared oversize responses fail before
     downstream headers; unknown-length overflows terminate their stream.
 15. An authenticated upstream proxy uses a fixed configured username and an
@@ -144,7 +147,7 @@ capability without placing the underlying credential in that workload.
     cannot contain wildcards or natural-language predicates. Critical and
     unknown operations cannot receive reusable approval. Telegram callbacks are
     opaque, random, single-use, expiring, and bound server-side to one pending
-    request and numeric allowlisted actor/chat.
+    request and the immutable equal private actor/chat ID.
 28. Workload tool adapters submit only tool name, classification, argument-key
     names, identifiers, and a digest of canonical arguments for admission. They
     exclude raw arguments, commands, credentials, manifests, and provider
@@ -171,9 +174,9 @@ capability without placing the underlying credential in that workload.
     accepted process-lifetime resolution. IPv6 listeners and answers are
     rejected. Charon has no UDP or HTTP/3 transport; Infra rejects UDP/443 and
     blocks direct egress so QUIC cannot bypass mediation.
-34. Response policy explicitly selects structured SSE/NDJSON streaming,
+34. Signed/transparent response policy explicitly selects structured SSE/NDJSON streaming,
     bounded JSON buffering, rolling text streaming, or allowlisted opaque
-    streaming. Authentication, session, and framing headers are removed first.
+    streaming. Authentication, session, and framing headers are removed first in those modes.
 35. Compression is identity-only or rejected. Opaque compressed response
     policy is reserved and fails validation until bounded decompression and
     sanitization exist. WebSocket upgrade is denied. Sanitization failure after
@@ -186,9 +189,43 @@ capability without placing the underlying credential in that workload.
     reconciles a stale checkpoint, and rejects an invalid chain or unrecognized
     checkpoint. Journal data is synced before checkpoint replacement.
 
-## Known milestone-0 limitations
+37. A separate exclusive-workload explicit listener binds a fixed realm/workload
+    through mandatory Infra network isolation. It is never a shared anonymous
+    proxy and does not weaken the signed manifest listener. Every reused HTTP/1.1
+    request or HTTP/2 stream is authorized independently.
+38. Exclusive forwarding grants perform no provider lookup. Caller-owned OAuth,
+    bot tokens, cookies, and session headers pass only under declared route
+    policy. Brokered grants require a typed header/Basic capability sink;
+    provider references are always local policy. All HTTPS terminates, with
+    CONNECT/SNI/HTTP authority agreement and verified upstream certificates.
+39. Gateway DNS public-address authorization precedes credential resolution;
+    the connector uses the same process pin. Concurrent DNS resolution cannot
+    replace an accepted pin. Shared-address, benchmark, private, metadata,
+    multicast, reserved and IPv6 addresses are denied. Ambient upstream proxy
+    variables cannot bypass this resolver.
+40. Exclusive gateway receipts replace the request path with a policy route
+    identifier, never record queries/URLs, and reserve journal capacity before
+    execution. Prestream denials finalize metadata receipts. TLS/authority
+    failures emit only fixed log outcomes. The executable restricts gateway
+    logging to Charon metadata even if RUST_LOG requests dependency traces.
+41. Exclusive gateway streams have configured upload/download, total-time and
+    idle bounds. Identity-only compression, protocol upgrade denial, caller-
+    followed independently authorized redirects, known-secret redaction and
+    session response policy are explicit. Streaming overflow cannot retract a
+    partial upload or already delivered response.
 
-- CONNECT interception supports HTTP/2 and HTTP/1.1 with one authorized inner
+The [workload gateway contract](../contracts/workload-gateway.md) and
+[Hermes deployment handoff](hermes-gateway.md) own the complete exclusive-mode
+schema, exact host inventory, isolation requirements and feature verification.
+Infra isolation is part of workload identity: any other principal able to
+reach the listener gains that workload's grants. The interception CA/key and
+plaintext TLS traffic are trusted Charon assets; compromise exposes caller-owned
+and brokered credentials. The network gateway cannot prove that a socket came
+from an admitted Hermes tool. The separate tool admission service is unchanged.
+
+## Current limitations
+
+- Signed CONNECT interception supports HTTP/2 and HTTP/1.1 with one authorized inner
   request or stream per tunnel. The owner security review and disposable
   secretless GitHub vertical proof are complete; production credentials remain
   gated on the documented deployment cutover.
@@ -222,6 +259,6 @@ capability without placing the underlying credential in that workload.
 - Transparent listener identity depends on Infra isolation and is weaker than
   a signed per-request manifest. Generic clients cannot securely correlate a
   network request to one Hermes tool call, so Charon authorizes it independently.
-- Structured request hydration buffers JSON and form bodies to the request
+- Signed/transparent structured request hydration buffers JSON and form bodies to the request
   limit. WebSockets, IPv6, UDP, and QUIC are denied rather than partially
   supported.

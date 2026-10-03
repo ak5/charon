@@ -6,6 +6,12 @@ Version: 1
 first adapter; decision semantics and reusable-rule policy remain
 channel-independent.
 
+The Telegram adapter reads exactly two identity/credential environment values at
+startup: `CHARON_TELEGRAM_BOT_TOKEN` and `CHARON_TELEGRAM_USER_ID`. The user ID
+is one positive numeric Telegram ID and is immutable for the process lifetime.
+The adapter has no runtime pairing, rebinding, allowlist, group, channel, or
+username-based authorization path.
+
 An adapter accepts a presentation model containing:
 
 - opaque pending-message ID;
@@ -38,8 +44,10 @@ non-reusable and requires an explicit higher-risk confirmation.
 
 ## Required behavior
 
-- Authenticate Telegram by operator-configured numeric user and chat IDs, never
-  usernames or display names.
+- Accept a Telegram update only when `chat.type == "private"`, `from.id` equals
+  `CHARON_TELEGRAM_USER_ID`, and `chat.id` equals that same configured value.
+  Usernames, display names, groups, channels, lists, pairing, and
+  first-user-wins behavior are never authorization inputs.
 - Use random opaque callback tokens; Telegram callback data contains no request
   digest, identity, command, rule, or secret.
 - Deliver one mutable message for each pending approval and allow only its
@@ -47,7 +55,7 @@ non-reusable and requires an explicit higher-risk confirmation.
 - Edit the message to a terminal redacted state after decision, timeout, or
   cancellation.
 - Treat duplicate, stale, edited, migrated-chat, unknown-user, unknown-chat,
-  and mismatched-message events as denials.
+  forwarded/copied, and mismatched-message events as denials.
 - Bound delivery retries and callback age.
 - Rate-limit per issuer, tenant, workload, chat, and action to prevent approval
   notification flooding.

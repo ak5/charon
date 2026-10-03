@@ -54,3 +54,12 @@ the [`approval broker operator runbook`](../docs/approval-broker-operations.md).
 
 Tool admission and receipt contracts are also implemented outside Charon.
 Their first adapter is [`charon-hermes`](../integrations/hermes/README.md).
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

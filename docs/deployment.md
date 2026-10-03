@@ -214,3 +214,12 @@ previous immutable image plus its complete policy/CA/provider mapping, verifies
 readiness, then restores the route. Application state remains on its independent
 persistent volume. For Hermes that means `/opt/data` survives every Charon,
 plugin, and image change; Charon neither mounts nor modifies it.
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](../contracts/workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

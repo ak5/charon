@@ -79,3 +79,12 @@ Charon has no request-path callback to an issuer or application database. It
 exposes no workload API to create, rotate, revoke, enumerate, or choose secrets,
 providers, realms, or policy. Realm lifecycle objects are separate
 operator/reconciler contracts.
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

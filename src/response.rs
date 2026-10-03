@@ -207,6 +207,8 @@ where
     ))
 }
 
+const STRUCTURED_SCAN_WINDOW_BYTES: usize = 64 * 1024;
+
 /// Parse, sanitize, and emit one bounded SSE event or NDJSON record at a time.
 pub fn sanitize_structured_stream<S, E>(
     upstream: S,
@@ -226,14 +228,17 @@ where
         format,
         max_record_bytes,
         forbidden_fields,
+        record_ready: false,
         finished: false,
     };
     Box::pin(stream::unfold(state, |mut state| async move {
         loop {
-            if let Some((record, consumed)) =
-                next_record(&state.pending, state.format, state.finished)
+            if (state.record_ready || state.finished)
+                && let Some((record, consumed)) =
+                    next_record(&state.pending, state.format, state.finished)
             {
                 state.pending.drain(..consumed);
+                state.record_ready = false;
                 if record.len() > state.max_record_bytes {
                     state.pending.zeroize();
                     state.finished = true;
@@ -253,12 +258,21 @@ where
                 return None;
             }
             if state.incoming_offset < state.incoming.len() {
-                state.pending.push(state.incoming[state.incoming_offset]);
-                state.incoming_offset += 1;
-                let framing_allowance = match state.format {
-                    StructuredStreamFormat::Sse => 4,
-                    StructuredStreamFormat::Ndjson => 1,
-                };
+                let remaining = &state.incoming[state.incoming_offset..];
+                let scan_length = remaining.len().min(STRUCTURED_SCAN_WINDOW_BYTES);
+                let scan = &remaining[..scan_length];
+                let boundary_length =
+                    bytes_through_next_boundary(&state.pending, scan, state.format);
+                let framing_allowance = framing_allowance(state.format);
+                let append_limit = state
+                    .max_record_bytes
+                    .saturating_add(framing_allowance)
+                    .saturating_sub(state.pending.len())
+                    .saturating_add(1);
+                let append_length = boundary_length.unwrap_or(scan.len()).min(append_limit);
+                state.pending.extend_from_slice(&scan[..append_length]);
+                state.incoming_offset += append_length;
+                state.record_ready = boundary_length == Some(append_length);
                 if state.pending.len() > state.max_record_bytes.saturating_add(framing_allowance) {
                     state.pending.zeroize();
                     state.finished = true;
@@ -268,6 +282,11 @@ where
                         )),
                         state,
                     ));
+                }
+                if boundary_length != Some(append_length)
+                    && state.incoming_offset < state.incoming.len()
+                {
+                    tokio::task::yield_now().await;
                 }
                 continue;
             }
@@ -310,6 +329,7 @@ struct StructuredState<S> {
     format: StructuredStreamFormat,
     max_record_bytes: usize,
     forbidden_fields: Vec<String>,
+    record_ready: bool,
     finished: bool,
 }
 
@@ -317,6 +337,46 @@ impl<S> Drop for StructuredState<S> {
     fn drop(&mut self) {
         self.pending.zeroize();
     }
+}
+
+const fn framing_allowance(format: StructuredStreamFormat) -> usize {
+    match format {
+        StructuredStreamFormat::Sse => 4,
+        StructuredStreamFormat::Ndjson => 1,
+    }
+}
+
+fn bytes_through_next_boundary(
+    pending: &[u8],
+    incoming: &[u8],
+    format: StructuredStreamFormat,
+) -> Option<usize> {
+    let mut earliest = None;
+    let delimiters: &[&[u8]] = match format {
+        StructuredStreamFormat::Sse => &[b"\n\n", b"\r\n\r\n"],
+        StructuredStreamFormat::Ndjson => &[b"\n"],
+    };
+    for delimiter in delimiters {
+        for pending_length in 1..delimiter.len() {
+            let incoming_length = delimiter.len() - pending_length;
+            if pending.len() >= pending_length
+                && incoming.len() >= incoming_length
+                && pending.ends_with(&delimiter[..pending_length])
+                && incoming.starts_with(&delimiter[pending_length..])
+            {
+                earliest = Some(earliest.map_or(incoming_length, |current: usize| {
+                    current.min(incoming_length)
+                }));
+            }
+        }
+        if let Some(index) = find_bytes(incoming, delimiter) {
+            let through_boundary = index + delimiter.len();
+            earliest = Some(earliest.map_or(through_boundary, |current: usize| {
+                current.min(through_boundary)
+            }));
+        }
+    }
+    earliest
 }
 
 fn next_record(
@@ -580,6 +640,45 @@ mod tests {
         .collect::<std::io::Result<Vec<_>>>()
         .unwrap_or_else(|error| panic!("{error}"))
         .concat();
+        assert_eq!(output, b"data: {\"n\":1}\n\ndata: {\"n\":2}\n\n");
+    }
+
+    #[tokio::test]
+    async fn structured_stream_rejects_a_large_delimiter_free_chunk() {
+        let oversized = Bytes::from(vec![b'x'; super::STRUCTURED_SCAN_WINDOW_BYTES * 3]);
+        let result = super::sanitize_structured_stream(
+            stream::iter([Ok::<_, std::io::Error>(oversized)]),
+            crate::broker::StructuredStreamFormat::Ndjson,
+            super::STRUCTURED_SCAN_WINDOW_BYTES * 2,
+            Vec::new(),
+        )
+        .collect::<Vec<_>>()
+        .await;
+
+        assert_eq!(result.len(), 1);
+        assert!(result[0].is_err());
+    }
+
+    #[tokio::test]
+    async fn structured_stream_detects_delimiters_split_between_chunks() {
+        let upstream = stream::iter([
+            Ok::<_, std::io::Error>(Bytes::from_static(b"data: {\"n\":1}\r\n")),
+            Ok(Bytes::from_static(b"\r\ndata: {\"n\":2}\n")),
+            Ok(Bytes::from_static(b"\n")),
+        ]);
+        let output = super::sanitize_structured_stream(
+            upstream,
+            crate::broker::StructuredStreamFormat::Sse,
+            32,
+            Vec::new(),
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .concat();
+
         assert_eq!(output, b"data: {\"n\":1}\n\ndata: {\"n\":2}\n\n");
     }
 

@@ -48,7 +48,7 @@ fn approval_request_digest_vector_is_stable() -> Result<()> {
     let request = document
         .get("request")
         .context("approval request example has no normalized request")?;
-    let canonical = serde_json::to_vec(request)?;
+    let canonical = serde_jcs::to_vec(request)?;
     let digest = format!("sha256:{:x}", Sha256::digest(canonical));
     assert_eq!(
         document.get("request_digest").and_then(Value::as_str),
