@@ -5,7 +5,8 @@
 Charon is a Rust package with contracts, deployment examples, first-party
 integrations, and durable design documentation in the same repository. Cargo
 owns Rust build and test behavior. Each integration owns its native package and
-tests under `integrations/<name>/`. `mise.toml` pins Rust, Python, and
+tests under `integrations/<name>/`. `mise.toml` pins Rust 1.99.0 with a minimal compiler profile plus Clippy/rustfmt,
+Python, and
 `cargo-deny` and provides
 stable operator tasks across formatting, linting, tests, deployment-contract
 tests, and dependency policy. This cross-tool quality gate is why

@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail, ensure};
 use charon::{
     ca,
     config::Config,
+    gateway::{Gateway, GatewayConfig},
     provider,
     proxy::{AppState, app, serve_transparent},
 };
@@ -16,13 +17,43 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
+    let command = parse_command()?;
+    let gateway_command = matches!(
+        command,
+        Command::GatewayServe(_) | Command::GatewayValidate(_)
+    );
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "charon=info".into()))
+        .with_env_filter(if gateway_command {
+            // Dependency transport traces can contain URLs/headers. This lane permits
+            // only Charon's fixed metadata events, irrespective of ambient RUST_LOG.
+            EnvFilter::new("off,charon=info")
+        } else {
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| "charon=info".into())
+        })
         .init();
 
-    let command = parse_command()?;
     let config_path = match command {
+        Command::GatewayValidate(path) => {
+            GatewayConfig::load(&path)?;
+            println!("valid workload gateway v1");
+            return Ok(());
+        }
+        Command::GatewayServe(path) => {
+            let config = GatewayConfig::load(&path)?;
+            let listen = config.listen;
+            let secrets = provider::build(&config.provider)?;
+            let gateway = std::sync::Arc::new(Gateway::new(config, secrets)?);
+            let listener = TcpListener::bind(listen)
+                .await
+                .context("gateway bind failed")?;
+            info!(%listen, "exclusive workload gateway listening");
+            axum::serve(listener, gateway.router())
+                .with_graceful_shutdown(shutdown_signal())
+                .await
+                .context("gateway server failed")?;
+            return Ok(());
+        }
         Command::Healthcheck(url) => return healthcheck(&url).await,
         Command::CaGenerate {
             name,
@@ -134,6 +165,8 @@ async fn main() -> Result<()> {
 }
 
 enum Command {
+    GatewayServe(PathBuf),
+    GatewayValidate(PathBuf),
     Serve(PathBuf),
     Healthcheck(String),
     CaGenerate {
@@ -157,6 +190,10 @@ enum Command {
 fn parse_command() -> Result<Command> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
+        [flag, path] if flag == "--gateway-config" => Ok(Command::GatewayServe(path.into())),
+        [gateway, validate, path] if gateway == "gateway" && validate == "validate" => {
+            Ok(Command::GatewayValidate(path.into()))
+        }
         [flag, path] if flag == "--config" => Ok(Command::Serve(path.into())),
         [command, url] if command == "healthcheck" => {
             Ok(Command::Healthcheck(url.clone().into_string().map_err(
@@ -195,7 +232,7 @@ fn parse_command() -> Result<Command> {
             Ok(Command::PolicyInventory(path.into()))
         }
         _ => bail!(
-            "usage: charon --config <path> | charon healthcheck <url> | charon policy validate <config> | charon policy inventory <config> | charon ca generate <name> <certificate> <private-key> | charon ca validate <certificate> <private-key> | charon ca fingerprint <certificate> | charon ca export <certificate> <output>"
+            "usage: charon --gateway-config <path> | charon gateway validate <path> | charon --config <path> | charon healthcheck <url> | charon policy validate <config> | charon policy inventory <config> | charon ca generate <name> <certificate> <private-key> | charon ca validate <certificate> <private-key> | charon ca fingerprint <certificate> | charon ca export <certificate> <output>"
         ),
     }
 }

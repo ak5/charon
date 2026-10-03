@@ -718,7 +718,7 @@ fn is_environment_reference(value: &str) -> bool {
     })
 }
 
-fn is_exact_host(value: &str) -> bool {
+pub(crate) fn is_exact_host(value: &str) -> bool {
     if value.is_empty()
         || value.len() > 253
         || !value.is_ascii()

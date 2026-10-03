@@ -83,6 +83,21 @@ pub struct ReceiptPermit {
     permit: Option<mpsc::OwnedPermit<DataPlaneReceipt>>,
 }
 
+impl ReceiptPermit {
+    /// Finalize a reserved metadata receipt for a request denied before streaming.
+    pub fn record(mut self, receipt: DataPlaneReceipt) {
+        if let Some(permit) = self.permit.take() {
+            let sender = permit.send(receipt);
+            if sender.is_closed() {
+                tracing::error!(
+                    outcome = "receipt_lost",
+                    "receipt writer closed during finalization"
+                );
+            }
+        }
+    }
+}
+
 impl ReceiptJournal {
     /// Open protected journal state and start its single append worker.
     ///
