@@ -56,11 +56,27 @@ path_prefix = "/backend-api/codex/"
 kind = "forward"
 
 [[routes]]
+name = "codex-usage"
+host = "chatgpt.com"
+scheme = "https"
+methods = ["GET"]
+paths = ["/backend-api/wham/usage"]
+allow_query = false
+caller_headers = ["authorization", "cookie"]
+session_response_headers = ["set-cookie", "www-authenticate"]
+max_request_bytes = 268435456
+max_response_bytes = 1073741824
+max_duration_seconds = 3600
+idle_timeout_seconds = 120
+[routes.mediation]
+kind = "forward"
+
+[[routes]]
 name = "nous-oauth"
 host = "portal.nousresearch.com"
 scheme = "https"
 methods = ["POST"]
-paths = ["/api/oauth/device/code", "/api/oauth/token", "/oauth/code", "/oauth/token"]
+paths = ["/api/oauth/device/code", "/api/oauth/token"]
 allow_query = true
 caller_headers = ["authorization", "cookie"]
 session_response_headers = ["set-cookie", "www-authenticate"]
