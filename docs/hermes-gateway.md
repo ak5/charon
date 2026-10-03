@@ -24,7 +24,8 @@ exact hostname and operation grant. No wildcard/allow-all destination exists.
 | --- | --- | --- |
 | `auth.openai.com` | POST `/oauth/token`, `/api/accounts/deviceauth/usercode`, `/api/accounts/deviceauth/token` | Caller-owned device login and token refresh |
 | `chatgpt.com` | GET/POST `/backend-api/codex/` prefix | Caller-owned Codex OAuth, account/session headers, streaming |
-| `portal.nousresearch.com` | POST `/api/oauth/device/code`, `/api/oauth/token`, `/oauth/code`, `/oauth/token` | Caller-owned Nous OAuth |
+| `chatgpt.com` | GET `/backend-api/wham/usage` | Caller-owned Codex quota probe |
+| `portal.nousresearch.com` | POST `/api/oauth/device/code`, `/api/oauth/token` | Caller-owned Nous OAuth |
 | `inference-api.nousresearch.com` | GET/POST `/v1/` prefix | Caller-owned Nous model credential |
 | `openrouter.ai` | GET/POST `/api/v1/` prefix | Caller-owned OpenRouter model credential |
 | `api.openai.com` | GET/POST/DELETE `/v1/` prefix | Caller-owned models and file uploads/downloads |
