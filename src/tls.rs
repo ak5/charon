@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use rcgen::{CertificateParams, Issuer, KeyPair};
+use rcgen::{CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose};
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, pem::PemObject as _},
@@ -59,8 +59,15 @@ impl TlsAuthority {
         let issuer = Issuer::from_ca_cert_pem(&self.certificate_pem, &self.private_key)
             .context("TLS CA certificate became invalid")?;
         let leaf_key = KeyPair::generate().context("failed to generate TLS leaf key")?;
-        let leaf = CertificateParams::new(vec![hostname.to_owned()])
-            .context("TLS leaf hostname is invalid")?
+        let mut params = CertificateParams::new(vec![hostname.to_owned()])
+            .context("TLS leaf hostname is invalid")?;
+        params.use_authority_key_identifier_extension = true;
+        // rcgen emits critical Basic Constraints and a Subject Key Identifier
+        // for ExplicitNoCa; AKI links this leaf to the loaded issuer's SKI.
+        params.is_ca = IsCa::ExplicitNoCa;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let leaf = params
             .signed_by(&leaf_key, &issuer)
             .context("failed to sign TLS leaf certificate")?;
         let private_key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));

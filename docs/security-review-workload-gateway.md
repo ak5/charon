@@ -48,6 +48,17 @@ The complete Hermes check also runs against the pinned upstream plugin API.
 
 ## Residual risks and release scope
 
+The strict-certificate follow-up reproduces both missing leaf Authority Key
+Identifier and missing CA Key Usage with Python 3.13.5 before repairing the
+complete generated chain. Required local and Linux CI tests use urllib and
+HTTPX 0.28.1 with default strict verification, required certificates and
+hostname checking. They check successful interception, reuse/policy denial,
+untrusted CA/hostname rejection and zero provider lookups; the Rust suite
+checks actual emitted CA/leaf extensions and the AKI/SKI link. Trust boundaries,
+policy, mediation and upstream validation are unchanged. Infra must regenerate
+an installed CA lacking required extensions and distribute its public trust;
+no automatic CA replacement or live deployment is part of this repair.
+
 No local test can attest Infra's network policy or CA distribution. The
 listener is unsafe when another principal can reach it; TLS interception places
 all permitted traffic inside Charon's trusted boundary. Caller-owned token
