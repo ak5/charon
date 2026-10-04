@@ -29,6 +29,14 @@ or HTTP/2. CONNECT, TLS SNI, HTTP `Host`, and HTTP/2 `:authority` must agree;
 conflicting/malformed/duplicate authority forms fail closed. All permitted
 HTTPS terminates at Charon; no splice, direct tunnel, or TLS fallback exists.
 Every request on a reused or multiplexed connection is authorized afresh.
+Generated CAs carry critical CA Basic Constraints and signing Key Usage,
+plus noncritical subject/authority key identifiers. Interception leaves carry
+an exact DNS SAN, critical non-CA Basic Constraints and digital-signature Key
+Usage, server-authentication EKU, and noncritical subject/authority key identifiers.
+The leaf authority identifier matches the loaded issuer's subject identifier.
+These chains support Python 3.13/OpenSSL strict verification without relaxing
+certificate, hostname or upstream validation. A signing CA missing required
+extensions must be regenerated and its public trust distributed by Infra.
 CONNECT itself grants no operation or credential. Tunnels expire after one
 hour; each operation has its own shorter configured time limits.
 

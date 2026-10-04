@@ -11,6 +11,9 @@ Python, and
 stable operator tasks across formatting, linting, tests, deployment-contract
 tests, and dependency policy. This cross-tool quality gate is why
 `mise run check` exists.
+Its `strict-tls-check` also selects Python 3.13.5 and HTTPX 0.28.1 in a
+disposable venv to verify generated CONNECT chains with Hermes-matched strict
+TLS clients. This client test does not change the admission package's Python pin.
 
 Repository-root `tmp/` is an ignored workspace for disposable artifacts. Use
 `tmp/<task-name>/` to avoid collisions. Never store credentials there. Move

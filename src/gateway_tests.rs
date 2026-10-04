@@ -721,6 +721,111 @@ fn executable(name: &str) -> Option<std::path::PathBuf> {
             .find(|p| p.is_file())
     })
 }
+
+#[tokio::test]
+#[ignore = "requires Hermes Python 3.13.5/HTTPX 0.28.1; mise run strict-tls-check"]
+async fn python_313_strict_clients_accept_generated_chain() -> Result<()> {
+    let python = std::env::var_os("CHARON_STRICT_TLS_PYTHON")
+        .context("strict Python client interpreter required")?;
+    let f = fixture().await?;
+    let output = timeout(
+        Duration::from_secs(60),
+        tokio::process::Command::new(python)
+            .env_clear()
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .kill_on_drop(true)
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/strict_tls_clients.py"
+            ))
+            .arg(format!("http://{}", f.address))
+            .arg(&f.gateway.config.tls.ca_certificate)
+            .output(),
+    )
+    .await??;
+    // This isolated script uses only synthetic hostnames/data; no ambient auth.
+    ensure!(
+        output.status.success(),
+        "strict TLS client proof failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    ensure!(
+        String::from_utf8(output.stdout)?.contains("PASS:"),
+        "client proof missing"
+    );
+    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn intercepted_chain_has_explicit_ca_and_server_certificate_roles() -> Result<()> {
+    use x509_parser::extensions::{GeneralName, ParsedExtension};
+    let f = fixture().await?;
+    let stream = tunnel(&f, "allowed.test", vec![b"http/1.1".to_vec()]).await?;
+    let chain = stream
+        .get_ref()
+        .1
+        .peer_certificates()
+        .context("chain missing")?;
+    assert_eq!(chain.len(), 2);
+    let (_, leaf) = x509_parser::parse_x509_certificate(chain[0].as_ref())?;
+    let (_, ca) = x509_parser::parse_x509_certificate(chain[1].as_ref())?;
+    // Duplicate extensions and ambiguous certificate roles must not be emitted.
+    leaf.extensions_map()?;
+    ca.extensions_map()?;
+    let ca_constraints = ca.basic_constraints()?.context("CA constraints missing")?;
+    assert!(ca_constraints.critical && ca_constraints.value.ca);
+    let ca_usage = ca.key_usage()?.context("CA key usage missing")?;
+    assert!(ca_usage.critical && ca_usage.value.key_cert_sign() && ca_usage.value.crl_sign());
+    let leaf_constraints = leaf
+        .basic_constraints()?
+        .context("leaf constraints missing")?;
+    assert!(leaf_constraints.critical && !leaf_constraints.value.ca);
+    let leaf_usage = leaf.key_usage()?.context("leaf key usage missing")?;
+    assert!(leaf_usage.critical && leaf_usage.value.digital_signature());
+    assert!(!leaf_usage.value.key_cert_sign() && !leaf_usage.value.crl_sign());
+    let eku = leaf.extended_key_usage()?.context("server EKU missing")?;
+    assert!(eku.value.server_auth && !eku.value.client_auth && !eku.value.any);
+    let san = leaf
+        .subject_alternative_name()?
+        .context("DNS SAN missing")?;
+    assert_eq!(
+        san.value.general_names,
+        vec![GeneralName::DNSName("allowed.test")]
+    );
+    let subject_id = |certificate: &x509_parser::certificate::X509Certificate<'_>| {
+        certificate
+            .extensions()
+            .iter()
+            .find_map(|extension| match extension.parsed_extension() {
+                ParsedExtension::SubjectKeyIdentifier(id) if !extension.critical => {
+                    Some(id.0.to_vec())
+                }
+                _ => None,
+            })
+    };
+    let authority_id = |certificate: &x509_parser::certificate::X509Certificate<'_>| {
+        certificate
+            .extensions()
+            .iter()
+            .find_map(|extension| match extension.parsed_extension() {
+                ParsedExtension::AuthorityKeyIdentifier(id) if !extension.critical => {
+                    id.key_identifier.as_ref().map(|key| key.0.to_vec())
+                }
+                _ => None,
+            })
+    };
+    let ca_id = subject_id(&ca).context("CA subject key ID missing")?;
+    assert_ne!(ca_id, [] as [u8; 0]);
+    assert_eq!(authority_id(&leaf), Some(ca_id.clone()));
+    assert_eq!(authority_id(&ca), Some(ca_id));
+    assert_ne!(
+        subject_id(&leaf).context("leaf subject key ID missing")?,
+        [] as [u8; 0]
+    );
+    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    Ok(())
+}
 #[tokio::test]
 async fn unmodified_curl_and_gh_use_standard_proxy_and_credential_settings() -> Result<()> {
     let curl = executable("curl").context("curl required for ordinary client proof")?;
