@@ -8,7 +8,11 @@ disable_tools = []
 
 [tasks.check]
 description = "Run the complete local quality gate"
-depends = ["fmt-check", "clippy", "test", "deploy-test", "deny", "hermes-check"]
+depends = ["fmt-check", "clippy", "test", "deploy-test", "deny", "hermes-check", "strict-tls-check"]
+
+[tasks.strict-tls-check]
+description = "Prove generated CONNECT chains with Hermes Python 3.13.5 and HTTPX 0.28.1"
+run = "sh tests/strict_tls.sh"
 
 [tasks.hermes-check]
 description = "Test the first-party Hermes permission and receipt integration"

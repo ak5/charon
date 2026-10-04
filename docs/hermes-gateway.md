@@ -60,6 +60,22 @@ and ordinary public roots. Set `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and
 `NODE_EXTRA_CA_CERTS` if used. Confirm Go/gh and Git trust the installed root.
 Never use TLS verification disable flags.
 
+Hermes Python 3.13.5 and HTTPX 0.28.1 require the complete generated chain to
+pass OpenSSL strict X.509 validation. Charon generates CA signing Key Usage,
+CA Basic Constraints and key identifiers, and server leaves with exact DNS
+SAN, non-CA constraints, digital-signature Key Usage, server-authentication EKU
+and an authority identifier linked to the CA. Do not clear
+`VERIFY_X509_STRICT`, set `verify=False`, disable hostname checks or change
+upstream trust to work around certificate errors.
+
+Infra must regenerate a deployment CA that lacks required extensions using
+the corrected released binary, validate/distribute the new public CA to every
+client bundle, and select the matching signer/key before acceptance. Updating
+the image cannot add extensions to an installed certificate. CA generation
+refuses overwrites; use the [CA rotation procedure](deployment.md#ca-commands-and-rotation).
+Keep cutover guarded until strict urllib and HTTPX requests succeed through
+the actual gateway and the other isolation/admission/backup checks still pass.
+
 Set HTTP_PROXY/HTTPS_PROXY and lowercase equivalents to the exclusive listener,
 for example `http://charon:18080`, without proxy authentication. Set Telegram's
 explicit `TELEGRAM_PROXY` to that same URL where the Hermes adapter needs it.
@@ -81,12 +97,21 @@ just the new feature:
 ```sh
 mise exec -- cargo test gateway --lib
 mise exec -- cargo run -- gateway validate examples/hermes-gateway.toml
+mise run strict-tls-check
 ```
 
 The client fixture requires curl and, on Linux, gh. Linux CI exercises both
 unmodified clients. On macOS it exercises curl only: existing Go/gh builds use
 Keychain trust rather than the fixture's `SSL_CERT_FILE`. Deployment verification
 must still prove gh with the installed CA; tests do not change system trust.
+
+`strict-tls-check` selects Python 3.13.5 in a disposable venv with HTTPX 0.28.1
+and runs a real local intercepted CONNECT request against a generated CA and
+verified TLS fixture origin. It keeps Python's default strict flags, required
+certificate verification and hostname checks; checks trusted urllib/HTTPX,
+reuse, denied operations, untrusted CA and wrong hostname; and proves zero
+provider lookups. Linux CI runs the same required test. The normal Rust suite
+also checks the emitted CA/leaf roles, critical extensions and identifier link.
 
 The fixture upstream uses a separate synthetic CA and verified TLS; its local
 routing override is confined to tests. Runtime has no private-address exception

@@ -138,6 +138,14 @@ until the explicit owner security review covers ADR 0002 and ADR 0003.
 
 ### CA commands and rotation
 
+Generated deployment CAs include critical CA Basic Constraints and signing Key
+Usage, with subject/authority identifiers. Intercepted server leaves include
+the issuer authority identifier, non-CA constraints, digital-signature Key Usage
+and server-authentication EKU. These extensions support strict Python 3.13 TLS
+clients. Regenerate a CA missing required extensions and distribute its new
+public trust before using the corrected gateway; an image update cannot alter
+an existing CA certificate. Do not weaken client or upstream verification.
+
 Charon refuses to overwrite CA files. Generate a deployment CA only in an
 operator-owned protected directory:
 
