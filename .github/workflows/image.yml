@@ -28,7 +28,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=sha,format=long
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64
@@ -45,7 +45,7 @@ jobs:
           sh -n integrations/vertical/run-in-workload.sh
           sh -n integrations/vertical/prepare-linux-bw.sh
       - name: Build secretless gh workload fixture
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: integrations/vertical
           file: integrations/vertical/Dockerfile
