@@ -12,6 +12,9 @@ assert sys.version_info[:3] == (3, 13, 5), "requires Hermes Python 3.13.5"
 assert httpx.__version__ == "0.28.1", "requires Hermes HTTPX 0.28.1"
 proxy, ca_file = sys.argv[1:]
 context = ssl.create_default_context(cafile=ca_file)
+# Python's default is TLS 1.2; state that floor explicitly for the raw probe
+# and static analysis. Verification flags and hostname checking stay intact.
+context.minimum_version = ssl.TLSVersion.TLSv1_2
 assert context.verify_flags & ssl.VERIFY_X509_STRICT
 assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname
 url = "https://allowed.test/plain"
