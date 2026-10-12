@@ -141,7 +141,8 @@ case "$bind_ip" in
     ;;
 esac
 negative_code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
-  --max-time 5 --proxy "http://$bind_ip:3129" http://api.github.com/ || true)"
+  --max-time 5 --proxy "http://$bind_ip:3129" \
+  --request-target https://api.github.com/user http://api.github.com/user || true)"
 running_revision="$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' charon)"
 
 if [ "$health_code" != 204 ] || [ "$negative_code" != 401 ] || [ "$running_revision" != "$image_sha" ]; then

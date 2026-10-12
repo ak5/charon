@@ -13,9 +13,11 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Transparent workload lane | Infra-routed workload → dedicated Charon listener | intercepted TCP/TLS; capability reference in one policy sink; [`transparent-gateway.md`](../contracts/transparent-gateway.md) | trusted only when isolated routing prevents spoofing and bypass | exact listener/service binding, SNI/authority agreement, capability, hydration, response mediation |
 | Identity issuer | control plane → workload → Charon | Ed25519 signed compact manifest; [`workload-claims.schema.json`](../contracts/workload-claims.schema.json) | trusted only to assert identity and capability | offline signature verification and independent concrete-operation policy |
 | Approval broker | control plane ↔ broker → identity issuer | normalized request and signed approval assertion; [`approval-broker.openapi.yaml`](../contracts/approval-broker.openapi.yaml) | trusted control-plane authorization component | outside Charon; cannot select destinations, secrets, or widen local policy |
-| Approval channel | broker ↔ Telegram/human | [`ApprovalChannel`](../contracts/approval-channel.md) presentation and opaque callback contract | trusted only for delivery and numeric actor/chat authentication | outside Charon; no decision, rule, assertion, or credential authority |
+| External broker approval channel | broker ↔ Telegram/human | [`ApprovalChannel`](../contracts/approval-channel.md) presentation and opaque callback contract | trusted only for delivery and numeric actor/chat authentication | outside Charon; no decision, rule, assertion, or credential authority |
 | Operator configuration | operator → Charon | deny-unknown-fields TOML; example in [`examples/charon.toml`](../examples/charon.toml) | trusted administrative input | validation before listener bind |
-| Secret provider | Charon → provider adapter | Rust `SecretProvider`; opaque policy-owned reference in, `SecretString` out, closed `ProviderError` failures | trusted with only its realm's secrets | readiness, bounded caching, non-disclosure, fail-closed errors |
+| KeePass store | Charon → private read-only KDBX | exact policy-owned entry UUID; `SecretString` out, data-free `StoreError` | trusted operator database and parser | locked boot, mapped protected Password fields, explicit lock, non-disclosure |
+| Owner admin | owner browser → separate Charon HTTPS listener | console-code first enrollment; origin-bound passkeys; short-lived opaque sessions | trusted owner and browser authenticator | public registrations, origin checks, bounded challenges, authenticated unlock/lock |
+| Local Telegram decisions | Charon ↔ private Telegram owner | outbound bot HTTPS and long-poll callbacks | dedicated bot token and immutable private numeric owner ID | exact-policy allow-once gate, callback actor/chat/message binding, bounded pending state |
 | Realm reconciler | operator → runtime | declarative desired/observed objects; schemas in [`contracts/`](../contracts/) | privileged control plane | no lifecycle mutation API; only runtime health and identity |
 | Runtime probe | operator → Charon | HTTP origin endpoints; [`openapi.yaml`](../contracts/openapi.yaml) | network-restricted observer | liveness and credential-free readiness |
 | Destination | Charon → exact host | HTTPS on port 443, optionally through configured egress; literal loopback HTTP only for local fixtures | untrusted response source | credential injection after authorization; redirects disabled |
@@ -69,53 +71,53 @@ approval assertion to the identity issuer.
 
 The issuer verifies and consumes that assertion, rechecks the current
 tenant/persona/workspace/lease tuple and policy generation, and mints one fresh
-single-use Charon manifest. The data plane never calls the broker and never
-receives control-plane approval requests, decisions, rules, assertions, callback
-tokens, approval-channel bot tokens, or presentation text. Caller-owned Telegram network requests are a
+single-use Charon manifest. The data plane never calls the external broker or receives its rules and
+assertions. Its optional local Telegram gate uses a dedicated operator-only KeePass bot token
+and pending callback handles, and narrows the configured network policy. Caller-owned Telegram network requests are a
 separate exclusive forwarding route. ADR 0005 and the approval artifacts in
 [`contracts/`](../contracts/) define this separate control-plane boundary.
 
 Resident-agent semantic approval uses the same grant engine but terminates at a
 local admission decision; it cannot manufacture a capability or skip Charon's
 independent network authorization. Session coding harnesses keep their native
-inline approval systems. The Telegram process and broker are separate optional
+inline approval systems. The external broker's Telegram adapter and broker are separate optional
 processes joined by a protected Unix socket: the broker has durable state and
 the assertion key but no Telegram token, while the adapter has the token and
 immutable private-user binding but no rule or assertion authority.
 
-## Provider adapter contract
+## KeePass and owner administration
 
-`SecretProvider` is the in-process adapter boundary. A provider receives only an
-opaque reference selected by trusted service policy and returns a
-`secrecy::SecretString`. Provider values must not implement `Debug`,
-serialization, or response conversion.
+One concrete `KeePassStore` belongs to one realm. Trusted configuration names a
+private KDBX file and optional private key file. Each exact canonical entry UUID
+maps to a policy reference and the realm's persona. The workload protocol cannot
+select a database, entry, password field, or fallback source. Only protected,
+nonempty, bounded Password fields resolve as `SecretString`; parser failures are
+reduced to the closed data-free `StoreError` taxonomy.
 
-Adapter failures cross the boundary only as the closed, data-free
-`ProviderError` variants. Raw SDK, HTTP, CLI, account, item, and reference
-details remain inside the adapter. This makes coarse non-disclosure enforceable
-by the Rust type system instead of relying only on implementation convention.
+The owner unlocks through an independent HTTPS admin listener on a stable DNS
+origin. First enrollment requires a short-lived operator-console code; subsequent
+sign-in verifies an enrolled passkey. Public key registrations persist in a
+private directory; challenges and ten-minute sessions remain in memory. An
+origin-checked session authorizes unlock, lock and recovery-passkey enrollment.
+Master passwords are not persisted. Lock and restart discard the mapped snapshot.
+The operator owns certificates and renewal, database backup and credential rotation.
+See [owner operations](admin.md) and [ADR 0004](adr/0004-keepass-store.md).
 
-The current binary registers environment and Vaultwarden adapters at compile
-time. Adding a provider requires a configuration variant, validation, adapter
-construction, and fail-closed tests. Charon intentionally does not load
-third-party dynamic plugins into its credential-holding process.
-
-The interface supports any number of reviewed backend implementations in the
-binary. A realm deliberately selects exactly one instance, so an outage cannot
-trigger backend fallback or change credential identity. “Multiple stores”
-therefore means interchangeable configured adapters across realms, not
-caller-selected routing within a request.
-
-One provider instance belongs to one realm. If a future realm needs several
-providers, local policy—not a manifest or request—must bind each service to a
-named provider instance. That change requires a new ADR because it expands
-configuration and failure-isolation complexity.
+Optional local Telegram approvals bind exact configured capability/route names.
+Requests pass identity, policy and sink checks before they create a prompt, and
+must receive a fresh allow-once decision before credential resolution or upstream
+forwarding. Each callback verifies numeric actor and private chat identity,
+original message ID, random token and expiry. Failure denies the request. The bot
+receives only capability/method metadata and the admin URL. It never transports
+enrollment codes, master passwords or credential values. The bot token is loaded from an operator-only protected KeePass entry after
+owner unlock. Lock cancels the channel and pending decisions. The token
+belongs only to Charon and must not be shared with a workload's Telegram bot.
 
 ## Reconciler contract
 
-Charon exposes no create, rotate, revoke, or delete endpoint. An external
+Charon exposes no realm create, rotate, revoke, or delete endpoint. An external
 operator reconciles the versioned desired object into isolated files,
-networking, provider state, PKI, and an immutable Charon process, then publishes
+networking, encrypted database, admin state, PKI, and an immutable Charon process, then publishes
 a redacted observation. The schemas describe exchanged data; they do not grant
 authority or prescribe a transport.
 
