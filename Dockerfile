@@ -2,11 +2,16 @@ FROM docker.io/library/rust:1.99.0-bookworm@sha256:59037199c44290f2befcdd58dcc54
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-RUN cargo build --locked --release
+RUN cargo build --locked --release \
+    && mkdir /runtime-libs \
+    && cp /usr/lib/*/libssl.so.3 /usr/lib/*/libcrypto.so.3 /runtime-libs/
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77
 LABEL org.opencontainers.image.source="https://github.com/ak5/charon"
 COPY --from=build /src/target/release/charon /usr/local/bin/charon
+COPY --from=build /runtime-libs/ /usr/lib/
+COPY --from=build /usr/share/doc/libssl3/copyright /usr/share/doc/libssl3/copyright
+COPY THIRD_PARTY_NOTICES.md /usr/share/doc/charon/THIRD_PARTY_NOTICES.md
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/charon"]
 CMD ["--config", "/etc/charon/charon.toml"]

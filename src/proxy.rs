@@ -26,7 +26,7 @@ use crate::{
     config::{Config, ServicePolicy},
     dns::PinnedResolver,
     identity::{AuthorizedWorkload, IDENTITY_HEADER, IdentityVerifier},
-    provider::{SecretProvider, SecretRef, ensure_private_file},
+    keepass::{KeePassStore, SecretRef, ensure_private_file},
     receipt::{DataPlaneReceipt, ReceiptJournal, ReceiptOutcome, receipt_stream},
     response::{
         guard_stream, redact_text_stream, sanitize_headers, sanitize_json_document,
@@ -54,7 +54,8 @@ const HOP_BY_HOP_HEADERS: [&str; 10] = [
 pub struct AppState {
     config: Config,
     client: Client,
-    secrets: Arc<dyn SecretProvider>,
+    secrets: Arc<KeePassStore>,
+    approvals: Option<Arc<crate::telegram::Telegram>>,
     identities: IdentityVerifier,
     tls: Option<Arc<TlsAuthority>>,
     receipts: Option<ReceiptJournal>,
@@ -67,7 +68,7 @@ impl AppState {
     ///
     /// Returns an error for invalid policy, upstream-proxy configuration, or
     /// HTTP client construction failure.
-    pub fn new(config: Config, secrets: Arc<dyn SecretProvider>) -> Result<Self> {
+    pub fn new(config: Config, secrets: Arc<KeePassStore>) -> Result<Self> {
         config.validate()?;
         let service_hosts = config
             .services
@@ -119,10 +120,17 @@ impl AppState {
             config,
             client,
             secrets,
+            approvals: None,
             identities,
             tls,
             receipts,
         })
+    }
+    /// Attach the optional local human-decision coordinator.
+    #[must_use]
+    pub fn with_approvals(mut self, approvals: Option<Arc<crate::telegram::Telegram>>) -> Self {
+        self.approvals = approvals;
+        self
     }
 }
 
@@ -374,7 +382,7 @@ async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         persona: state.config.realm.persona.clone(),
         generation: state.config.realm.generation,
     };
-    if state.secrets.health().await.is_err() {
+    if state.secrets.health().is_err() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             axum::Json(Readiness {
@@ -504,10 +512,23 @@ async fn forward_inner_as(
         return Ok((StatusCode::FORBIDDEN, "capability reference is missing").into_response());
     }
 
+    anyhow::ensure!(
+        state.approvals.is_some()
+            || state
+                .config
+                .admin
+                .as_ref()
+                .is_none_or(|admin| admin.telegram.is_none()),
+        "approval channel unavailable"
+    );
+    if let Some(approvals) = &state.approvals {
+        approvals
+            .authorize(&identity.capability, parts.method.as_str())
+            .await?;
+    }
     let secret = state
         .secrets
-        .resolve(&SecretRef::from_policy(&policy.secret_ref))
-        .await?;
+        .resolve(&SecretRef::from_policy(&policy.secret_ref))?;
     if secret.expose_secret().len() > policy.response.max_secret_bytes {
         anyhow::bail!("resolved credential exceeds the configured bound");
     }

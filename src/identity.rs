@@ -264,9 +264,7 @@ mod tests {
     use ed25519_dalek::{Signer as _, SigningKey};
 
     use super::{IdentityVerifier, WorkloadClaims};
-    use crate::config::{
-        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ServicePolicy,
-    };
+    use crate::config::{CapabilityPolicy, Config, IdentityConfig, RealmConfig, ServicePolicy};
 
     const NOW: u64 = 1_800_000_000;
 
@@ -286,7 +284,8 @@ mod tests {
                 .parse()
                 .unwrap_or_else(|error| panic!("{error}")),
             upstream_proxy: None,
-            provider: ProviderConfig::Environment,
+            keepass: crate::test_support::config("developer"),
+            admin: None,
             tls: None,
             identity: IdentityConfig {
                 issuer: "test-issuer".into(),

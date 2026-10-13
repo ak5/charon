@@ -1,5 +1,6 @@
 //! End-to-end tests for the milestone-0 HTTP forward proxy.
 
+mod common;
 use std::{
     collections::HashMap,
     sync::{
@@ -13,7 +14,6 @@ use std::{
 use std::os::unix::fs::PermissionsExt as _;
 
 use anyhow::{Result, anyhow};
-use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, Bytes},
@@ -25,36 +25,19 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use charon::{
     config::{
-        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ServicePolicy,
-        UpstreamProxyConfig,
+        CapabilityPolicy, Config, IdentityConfig, RealmConfig, ServicePolicy, UpstreamProxyConfig,
     },
     identity::WorkloadClaims,
-    provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
     proxy::{AppState, app},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
 use futures_util::{StreamExt as _, stream};
-use secrecy::SecretString;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::TcpListener,
     sync::{Mutex, mpsc, oneshot},
     time::{Duration, timeout},
 };
-
-#[derive(Debug)]
-struct StaticProvider(HashMap<String, String>);
-
-#[async_trait]
-impl SecretProvider for StaticProvider {
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
-        self.0
-            .get(secret_ref.as_str())
-            .cloned()
-            .map(SecretString::from)
-            .ok_or(ProviderError::SecretUnavailable)
-    }
-}
 
 fn signing_key() -> SigningKey {
     SigningKey::from_bytes(&[11_u8; 32])
@@ -125,7 +108,8 @@ async fn hydrates_capability_reference_without_exposing_secret_to_client() -> Re
         realm: realm(),
         listen: proxy_address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: Some(charon::config::ReceiptConfig {
@@ -154,10 +138,10 @@ async fn hydrates_capability_reference_without_exposing_secret_to_client() -> Re
     };
     // Tests use an IP destination; production configuration intentionally
     // rejects hosts containing ports, while URI matching receives host only.
-    let secrets = StaticProvider(HashMap::from([(
+    let secrets = common::store(HashMap::from([(
         "CHARON_MOCK_TOKEN".into(),
         "real-secret".into(),
-    )]));
+    )]))?;
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -238,7 +222,8 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
             username: Some("egress".into()),
             password_file: Some(password_file),
         }),
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: None,
@@ -261,10 +246,10 @@ async fn authenticates_to_upstream_proxy_from_a_protected_file() -> Result<()> {
             transparent_listen: None,
         }],
     };
-    let secrets = StaticProvider(HashMap::from([(
+    let secrets = common::store(HashMap::from([(
         "CHARON_TOKEN".into(),
         "synthetic-token".into(),
-    )]));
+    )]))?;
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -293,7 +278,8 @@ async fn denies_unlisted_destinations() -> Result<()> {
         realm: realm(),
         listen: proxy_address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: None,
@@ -316,7 +302,7 @@ async fn denies_unlisted_destinations() -> Result<()> {
             transparent_listen: None,
         }],
     };
-    let secrets = StaticProvider(HashMap::from([("CHARON_TOKEN".into(), "secret".into())]));
+    let secrets = common::store(HashMap::from([("CHARON_TOKEN".into(), "secret".into())]))?;
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -332,19 +318,6 @@ async fn denies_unlisted_destinations() -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-struct CountingProvider {
-    calls: Arc<AtomicUsize>,
-}
-
-#[async_trait]
-impl SecretProvider for CountingProvider {
-    async fn resolve(&self, _secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(SecretString::from("must-not-be-read"))
-    }
-}
-
 #[tokio::test]
 async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
     let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -355,7 +328,8 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
         realm: realm(),
         listen: proxy_address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: None,
@@ -378,11 +352,12 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
             transparent_listen: None,
         }],
     };
-    let calls = Arc::new(AtomicUsize::new(0));
-    let provider = CountingProvider {
-        calls: calls.clone(),
-    };
-    let state = Arc::new(AppState::new(config, Arc::new(provider))?);
+    let provider = Arc::new(common::store(HashMap::from([(
+        "CHARON_MOCK_TOKEN".into(),
+        "synthetic-not-resolved".into(),
+    )]))?);
+    let calls = Arc::clone(&provider);
+    let state = Arc::new(AppState::new(config, provider)?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
     let client = reqwest::Client::builder()
@@ -395,7 +370,7 @@ async fn rejects_identity_before_resolving_a_credential() -> Result<()> {
         .await?;
 
     assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.lookup_count(), 0);
     Ok(())
 }
 
@@ -407,7 +382,8 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
         realm: realm(),
         listen: proxy_address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: None,
@@ -430,11 +406,12 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
             transparent_listen: None,
         }],
     };
-    let calls = Arc::new(AtomicUsize::new(0));
-    let provider = CountingProvider {
-        calls: Arc::clone(&calls),
-    };
-    let state = Arc::new(AppState::new(config, Arc::new(provider))?);
+    let provider = Arc::new(common::store(HashMap::from([(
+        "CHARON_MOCK_TOKEN".into(),
+        "synthetic-not-resolved".into(),
+    )]))?);
+    let calls = Arc::clone(&provider);
+    let state = Arc::new(AppState::new(config, provider)?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
     let manifest = token("upload", "nonce-oversize-1234")?;
@@ -450,7 +427,7 @@ async fn rejects_declared_oversize_before_credential_resolution() -> Result<()> 
     let mut response = Vec::new();
     timeout(Duration::from_secs(2), stream.read_to_end(&mut response)).await??;
     assert!(response.starts_with(b"HTTP/1.1 413"));
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.lookup_count(), 0);
     Ok(())
 }
 
@@ -480,7 +457,8 @@ async fn never_follows_upstream_redirects_with_an_injected_credential() -> Resul
         realm: realm(),
         listen: proxy_address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: None,
@@ -503,10 +481,10 @@ async fn never_follows_upstream_redirects_with_an_injected_credential() -> Resul
             transparent_listen: None,
         }],
     };
-    let secrets = StaticProvider(HashMap::from([(
+    let secrets = common::store(HashMap::from([(
         "CHARON_REDIRECT_TOKEN".into(),
         "fixture-secret".into(),
-    )]));
+    )]))?;
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -577,7 +555,8 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
         realm: realm(),
         listen: proxy_address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: None,
         identity: identity_config(),
         receipts: None,
@@ -600,10 +579,10 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
             transparent_listen: None,
         }],
     };
-    let secrets = StaticProvider(HashMap::from([(
+    let secrets = common::store(HashMap::from([(
         "CHARON_STREAM_TOKEN".into(),
         "fixture-secret".into(),
-    )]));
+    )]))?;
     let state = Arc::new(AppState::new(config, Arc::new(secrets))?);
     tokio::spawn(async move { axum::serve(proxy_listener, app(state)).await });
 
@@ -662,5 +641,26 @@ async fn streams_request_and_response_without_full_body_buffering() -> Result<()
         b"response-first-padding-longer-than-any-protected-valueresponse-second"
     );
     assert!(response.chunk().await?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn deployment_smoke_target_reaches_identity_check_without_a_secret() -> Result<()> {
+    use tower::ServiceExt as _;
+    let mut config =
+        charon::config::Config::load(std::path::Path::new("deploy/charon.example.toml"))?;
+    config.receipts = None;
+    let store = Arc::new(charon::keepass::KeePassStore::new(config.keepass.clone())?);
+    let state = Arc::new(AppState::new(config, store.clone())?);
+    let response = app(state)
+        .oneshot(
+            http::Request::builder()
+                .uri("https://api.github.com/user")
+                .header("host", "api.github.com")
+                .body(axum::body::Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(store.lookup_count(), 0);
     Ok(())
 }
