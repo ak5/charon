@@ -19,8 +19,8 @@ runtime_root: /run/charon/realms/<realm_id>
 ca_generation: stable generation ID selected for new leaves
 ```
 
-The renderer, not a caller or workload, supplies Vaultwarden account/session,
-item mappings, endpoint, listener, and filesystem paths. The desired object
+The renderer, not a caller or workload, supplies KeePass database and optional key-file paths,
+exact UUID mappings, endpoint, listener, and filesystem paths. The desired object
 contains no credential value, unlock session, private key, or root-key input.
 
 ## Filesystem layout
@@ -30,21 +30,26 @@ contains no credential value, unlock session, private key, or root-key input.
   charon.toml                 root:realm 0440
   ownership                  root:root 0444 (realm/tenant/persona marker)
 /var/lib/charon/realms/<realm_id>/
-  bw/                         realm:realm 0700 (encrypted CLI app-data)
+  vault.kdbx                  realm:realm 0400 (encrypted read-only database)
+  admin/                      realm:realm 0700
+    passkeys.json             realm:realm 0600 (public registrations)
 /run/charon/realms/<realm_id>/            tmpfs, realm:realm 0700
   credentials/
-    vaultwarden-session       realm:realm 0400
+    keepass-key-file          realm:realm 0400 when configured
+    admin-tls-key.pem         realm:realm 0400
     upstream-proxy-password   realm:realm 0400 when configured
   ca/<ca_generation>/
     intermediate.pem          realm:realm 0444
     intermediate-key.pem      realm:realm 0400
 ```
 
-Provider cache and nonce state are process memory and are never files. The root
+Unlocked credential snapshot, challenges, sessions and nonce state are process memory and are never files. The root
 certificate may be mounted read-only for chain validation; the root private key
 is forbidden on the runtime host. A realm container receives only its exact
-config/state/runtime subdirectories. Symlinks, traversal, shared writable
-parents, and group/other-readable private files fail validation.
+config/state/runtime subdirectories. Charon rejects symlink private input files, symlink admin-state parents, and
+group/other-accessible private files. The reconciler must reject traversal,
+shared writable ancestors and mounts outside the owned realm roots; these are
+not Charon runtime checks.
 
 ## Operations
 
@@ -54,14 +59,14 @@ coarse state, redacted reason code, and timestamps.
 
 | Operation | Postcondition |
 | --- | --- |
-| `create` | isolated paths/account/listener exist; no process until validation |
+| `create` | isolated paths/database/admin state/listeners exist; no process until validation |
 | `validate` | image/config/files/permissions/CA chain and realm-persona consistency pass |
-| `start` | immutable digest runs as realm UID; readiness reports expected IDs/generation |
-| `health` | liveness plus config/provider-lock/network readiness, without fetching a credential |
+| `start` | immutable digest runs as realm UID and starts locked; observed config identity is recorded, credential routing waits for unlock/readiness |
+| `health` | liveness plus config/store-lock/network readiness, without fetching a credential |
 | `replace` | candidate generation validates, atomically becomes active, old generation retained for rollback window |
 | `rotate-ca` | new intermediate validates and signs new leaves; old connections drain during bounded overlap |
 | `revoke` | issuance/network access disabled, process stopped, sessions/caches/keys invalidated |
-| `remove` | ownership marker rechecked, runtime destroyed, durable non-secret tombstone/audit retained |
+| `remove` | ownership marker rechecked, runtime destroyed, durable metadata-only audit retained |
 
 `replace` and `rotate-ca` are independent from credential replacement. No
 operation falls back to another realm, account, listener, item, or generation.
@@ -71,7 +76,7 @@ operation falls back to another realm, account, listener, item, or generation.
 - `provisioning`: not routable;
 - `ready`: exact observed generation is safe for issuance/routing;
 - `degraded`: still denies unsafe operations; operator action required;
-- `locked`: provider unavailable; all credential use denied;
+- `locked`: KeePass store locked or unavailable; all credential use denied;
 - `revoked`: issuance and network reachability disabled;
 - `removing` / `removed`: never routable.
 
@@ -83,8 +88,8 @@ ready.
 
 A workspace can reach only its derived persona realm endpoint and necessary
 internal control services. It cannot reach other realm listeners or governed
-destinations directly. Charon alone can reach its persona Vaultwarden endpoint
-and the configured Squid egress. Exact destination authorization occurs again
+destinations directly. Charon alone can read its persona KDBX and reach
+the configured egress. The workload cannot reach the owner admin listener. Exact destination authorization occurs again
 inside Charon. Network policy and Charon authorization are both required.
 
 ## CA overlap
@@ -98,8 +103,8 @@ realm endpoint immediately; certificate revocation alone is not relied upon.
 
 ## Disposable acceptance fixture
 
-The fixture creates Alice and Bob with separate Vaultwarden identities, item
-mappings, app-data, sessions, configs, caches, listeners, UIDs/containers, and
+The fixture creates Alice and Bob with separate synthetic KeePass databases, entry
+mappings, admin state, configs, unlocked snapshots, listeners, UIDs/containers, and
 intermediate keys under one disposable root. It must prove:
 
 1. two Alice workspaces can use Alice's assigned endpoint;

@@ -1,4 +1,4 @@
-//! Prepare non-secret CA/identity material and issue short-lived vertical manifests.
+//! Prepare isolated fixture CA/identity material and short-lived vertical manifests.
 
 use std::{
     fs::{self, OpenOptions},
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
             issue(Path::new(&directory))
         }
         _ => bail!(
-            "usage: cargo run --example vertical_fixture -- init <directory> <vault-item-uuid> | issue <directory>"
+            "usage: cargo run --example vertical_fixture -- init <directory> <keepass-entry-uuid> | issue <directory>"
         ),
     }
 }
@@ -127,7 +127,7 @@ fn issue(directory: &Path) -> Result<()> {
             now.saturating_sub(120),
             now.saturating_sub(60),
         ),
-        ("provider-failure", now, now, now + 50),
+        ("store-locked", now, now, now + 50),
     ];
     let manifest_directory = directory.join(MANIFEST_DIRECTORY);
     for (name, iat, nbf, exp) in manifests {
@@ -216,17 +216,20 @@ url = "http://egress.example.internal:8888"
 username = "egress"
 password_file = "/run/credentials/egress-proxy-password"
 
-[provider]
-kind = "vaultwarden"
-cli_path = "/usr/local/bin/bw"
-appdata_dir = "/var/lib/charon/bitwarden-cli"
-session_file = "/run/credentials/charon-vaultwarden-session"
-cache_ttl_seconds = 5
+[keepass]
+database = "/var/lib/charon/vault.kdbx"
 
-[[provider.items]]
+[[keepass.items]]
 secret_ref = "github/vertical-developer"
 persona = "vertical-developer"
-item_id = "{item_id}"
+entry_id = "{item_id}"
+
+[admin]
+listen = "0.0.0.0:8444"
+origin = "https://charon.example.test:8444"
+certificate = "/etc/charon/admin/fullchain.pem"
+private_key = "/run/credentials/charon-admin-key.pem"
+passkeys_file = "/var/lib/charon/admin/passkeys.json"
 
 [tls]
 ca_certificate = "/run/charon-ca/ca.pem"

@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
 chacha20poly1305 = "0.10"
@@ -37,11 +36,18 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 zeroize = "1.8"
+keepass = { version = "0.15.2", default-features = false }
+webauthn-rs = "0.5.5"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+keepass = { version = "0.15.2", default-features = false, features = ["save_kdbx4"] }
 http-body-util = "0.1"
 tempfile = "3.23"
 x509-parser = "0.18"
+webauthn-authenticator-rs = { version = "0.5.5", default-features = false, features = ["softpasskey"] }
+tower = { version = "0.5", features = ["util"] }
 
 
 [lints.rust]
