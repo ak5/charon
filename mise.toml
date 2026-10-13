@@ -46,3 +46,15 @@ run = "cargo deny check"
 [tasks.dev]
 description = "Run Charon with the local development policy"
 run = "cargo run -- --config examples/charon.dev.toml"
+
+[tasks.browser-admin-check]
+description = "Prove the HTTPS owner UI with real Chrome and a synthetic virtual passkey (Chrome and Node 22+ required)"
+run = "cargo test --lib admin::tests::chrome_passkey_ui -- --ignored --nocapture"
+
+[tasks.e2e-flow]
+description = "Run connected offline two-password KeePass/admin/Telegram/proxy/API E2E (curl required)"
+run = "cargo test --lib gateway::e2e::two_passwords_approval_and_restart -- --ignored --nocapture"
+
+[tasks.e2e]
+description = "Run connected credential-flow and real Chrome owner-UI E2E"
+depends = ["e2e-flow", "browser-admin-check"]

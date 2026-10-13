@@ -9,12 +9,33 @@ tenant = "example"
 persona = "example-agent"
 generation = 1
 
-[provider]
-kind = "environment"
 
 [tls]
 ca_certificate = "/run/charon-ca/ca.pem"
 ca_private_key = "/run/credentials/charon-ca-key.pem"
+
+[keepass]
+# Optional operator-only protected Password entry; never include in items.
+# telegram_bot_token_entry_id = "00000000-0000-4000-8000-000000000003"
+database = "/var/lib/charon/vault.kdbx"
+# Optional: key_file = "/run/credentials/charon-key-file"
+
+[[keepass.items]]
+secret_ref = "CHARON_EXAMPLE_TOKEN"
+persona = "example-agent"
+entry_id = "00000000-0000-4000-8000-000000000001"
+
+[admin]
+listen = "0.0.0.0:8444"
+origin = "https://charon.example.test:8444"
+certificate = "/etc/charon/admin/fullchain.pem"
+private_key = "/run/credentials/charon-admin-key.pem"
+passkeys_file = "/var/lib/charon/admin/passkeys.json"
+
+# Optional Telegram starts after owner unlock; configure its KeePass entry above.
+# [admin.telegram]
+# user_id = 123456789
+# approval_capabilities = [] # Exact capability/route names; allow once per request.
 
 [identity]
 issuer = "example-control-plane"

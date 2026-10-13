@@ -12,12 +12,14 @@ x-charon: &charon
     - upstream
   volumes:
     - "${CHARON_CONFIG_PATH:?set the reviewed vertical config}:/etc/charon/charon.toml:ro"
-    - "${CHARON_BW_CLI_PATH:?set the pinned native bw executable}:/usr/local/bin/bw:ro"
-    - "${CHARON_BW_APPDATA_PATH:?set encrypted CLI state}:/var/lib/charon/bitwarden-cli"
     - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
     - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
     - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
     - "${CHARON_RECEIPT_STATE_PATH:?set protected receipt state directory}:/var/lib/charon/receipts"
+    - "${CHARON_KDBX_PATH:?set private encrypted KDBX}:/var/lib/charon/vault.kdbx:ro"
+    - "${CHARON_ADMIN_CERTIFICATE_PATH:?set browser-trusted admin certificate}:/etc/charon/admin/fullchain.pem:ro"
+    - "${CHARON_ADMIN_PRIVATE_KEY_PATH:?set private admin TLS key}:/run/credentials/charon-admin-key.pem:ro"
+    - "${CHARON_ADMIN_STATE_PATH:?set private admin state}:/var/lib/charon/admin"
   command: ["--config", "/etc/charon/charon.toml"]
   healthcheck:
     test: ["CMD", "/usr/local/bin/charon", "healthcheck", "http://127.0.0.1:3129/healthz"]
@@ -29,18 +31,21 @@ x-charon: &charon
 services:
   charon:
     <<: *charon
-    volumes:
-      - "${CHARON_CONFIG_PATH:?set the reviewed vertical config}:/etc/charon/charon.toml:ro"
-      - "${CHARON_BW_CLI_PATH:?set the pinned native bw executable}:/usr/local/bin/bw:ro"
-      - "${CHARON_BW_APPDATA_PATH:?set encrypted CLI state}:/var/lib/charon/bitwarden-cli"
-      - "${CHARON_BW_SESSION_PATH:?set the memory-backed unlock session}:/run/credentials/charon-vaultwarden-session:ro"
-      - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
-      - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
-      - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
-      - "${CHARON_RECEIPT_STATE_PATH:?set protected receipt state directory}:/var/lib/charon/receipts"
+    ports:
+      - "${CHARON_ADMIN_BIND_IP:?set the owner-only HTTPS address}:8444:8444"
 
   charon-locked:
     <<: *charon
+    volumes:
+      - "${CHARON_CONFIG_PATH:?set the reviewed vertical config}:/etc/charon/charon.toml:ro"
+      - "${CHARON_KDBX_PATH:?set private encrypted KDBX}:/var/lib/charon/vault.kdbx:ro"
+      - "${CHARON_ADMIN_CERTIFICATE_PATH:?set browser-trusted admin certificate}:/etc/charon/admin/fullchain.pem:ro"
+      - "${CHARON_ADMIN_PRIVATE_KEY_PATH:?set private admin TLS key}:/run/credentials/charon-admin-key.pem:ro"
+      - "${CHARON_LOCKED_ADMIN_STATE_PATH:?set private locked-instance admin state}:/var/lib/charon/admin"
+      - "${CHARON_CA_CERTIFICATE_PATH:?set public CA path}:/run/charon-ca/ca.pem:ro"
+      - "${CHARON_CA_PRIVATE_KEY_PATH:?set private CA key path}:/run/credentials/charon-ca-key.pem:ro"
+      - "${CHARON_EGRESS_PROXY_PASSWORD_PATH:?set protected Squid password path}:/run/credentials/egress-proxy-password:ro"
+      - "${CHARON_LOCKED_RECEIPT_STATE_PATH:?set isolated locked receipt state}:/var/lib/charon/receipts"
 
   workload:
     build:

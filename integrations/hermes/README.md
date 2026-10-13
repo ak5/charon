@@ -109,7 +109,7 @@ agent:
 Run both containers as UID/GID `10000:10000`. Mount one dedicated socket volume
 at `/run/charon-hermes` in both containers. Mount the read-only policy and a
 private receipt-state volume only in the admission container. Do not share
-Docker's socket, Charon manifests, Vaultwarden state, provider references, or
+Docker's socket, Charon manifests, KeePass state, credential references, or
 credentials.
 
 ```text
