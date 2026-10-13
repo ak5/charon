@@ -28,18 +28,18 @@ anything durable to its owned tracked path.
 
 ## Branch and release policy
 
-`dev` is the integration and default branch. Ordinary pull requests target
-`dev`. Maintainers SHOULD squash a single-result change and CAN rebase an
-approved commit series whose commits pass independently.
+`main` is the only long-lived branch, the default branch, and the production
+source. Feature branches start from `main`; ordinary changes, dependency updates,
+and hotfixes all reach it through pull requests with required checks.
+Maintainers SHOULD squash a single-result change and CAN use a merge commit
+when preserving contributor or integration ancestry matters. Shared history is
+never rewritten.
 
-`main` is production. Only `dev` release pull requests and emergency
-`hotfix/*` pull requests target it. Releases MUST use merge commits because
-squash or rebase would break the shared ancestry required for repeated
-`dev`-to-`main` promotion. After a hotfix, maintainers MUST merge `main` back
-into `dev`.
-
-Both long-lived branches require pull requests and block force pushes and
-deletion. The project does not use a merge queue.
+`main` requires pull requests and blocks force pushes and deletion. The project
+does not use a merge queue. Successful CI on a merged `main` commit publishes
+immutable container images; deployment is an operator decision. No release
+branch or promotion PR is required. The `mise run dev` task is a local development
+command, not a branch.
 
 ## Documentation ownership
 

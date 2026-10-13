@@ -8,7 +8,7 @@ disable_tools = []
 
 [tasks.check]
 description = "Run the complete local quality gate"
-depends = ["fmt-check", "clippy", "test", "deploy-test", "deny", "hermes-check", "strict-tls-check"]
+depends = ["fmt-check", "clippy", "test", "deploy-test", "deny", "hermes-check", "strict-tls-check", "pr-policy-check"]
 
 [tasks.strict-tls-check]
 description = "Prove generated CONNECT chains with Hermes Python 3.13.5 and HTTPX 0.28.1"
@@ -58,3 +58,7 @@ run = "cargo test --lib gateway::e2e::two_passwords_approval_and_restart -- --ig
 [tasks.e2e]
 description = "Run connected credential-flow and real Chrome owner-UI E2E"
 depends = ["e2e-flow", "browser-admin-check"]
+
+[tasks.pr-policy-check]
+description = "Verify the main-only pull request branch contract"
+run = "sh tests/pr_path.sh"

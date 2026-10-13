@@ -26,11 +26,11 @@ scratch files created by the current task.
 
 Branch workflow:
 
-- Agents MUST create feature branches from `dev` and target ordinary pull
-  requests to `dev`.
-- Only release pull requests from `dev` CAN target `main`.
-- Maintainers MUST merge `dev` into `main` with a merge commit to preserve
-  ancestry.
-- Agents MUST treat `main` as production and release immutable container
-  versions from it.
-- Agents MUST NOT rewrite shared branch history.
+- `main` is the only long-lived branch and the production/default branch.
+- Agents MUST create feature branches from `main` and target pull requests to
+  `main`. Dependency updates follow the same path.
+- `main` MUST remain protected and PR-only, with required checks. Agents MUST
+  NOT push directly to it or rewrite shared branch history.
+- Maintainers SHOULD squash a single-result change and CAN use a merge commit
+  when preserving contributor or integration ancestry matters.
+- Release immutable container versions from the exact verified `main` commit.

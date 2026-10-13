@@ -1,5 +1,9 @@
 # Deployment
 
+All changes, including dependency updates, merge through checked pull requests
+to the protected default branch `main`. Each successful merged revision can be
+published; deploying its immutable image remains an operator decision.
+
 On a successful `CI` run for a push to `main`,
 `.github/workflows/release.yml` checks out that exact commit and publishes
 `ghcr.io/<repository-owner>/<repository>:sha-<40-character-commit>`. The image

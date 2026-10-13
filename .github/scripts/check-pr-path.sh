@@ -9,24 +9,12 @@ if [ -z "$base" ] || [ -z "$head" ]; then
   exit 2
 fi
 
-case "$base:$head" in
-  main:dev)
-    printf 'valid release path: dev -> main; use a merge commit\n'
-    ;;
-  main:hotfix/*)
-    printf 'valid hotfix path: %s -> main; use a merge commit and then merge main -> dev\n' "$head"
-    ;;
-  main:*)
-    printf 'error: main accepts only dev releases or hotfix/* emergency repairs\n' >&2
-    exit 1
-    ;;
-  dev:main)
-    printf 'valid hotfix reconciliation path: main -> dev; use a merge commit\n'
-    ;;
-  dev:*)
-    printf 'valid integration path: %s -> dev; use squash or an approved rebase merge\n' "$head"
-    ;;
-  *)
-    printf 'information: no staged-release path rule applies to %s -> %s\n' "$head" "$base"
-    ;;
-esac
+if [ "$base" != main ]; then
+  printf 'error: all pull requests must target main\n' >&2
+  exit 1
+fi
+if [ "$head" = main ]; then
+  printf 'error: pull requests must come from a feature branch\n' >&2
+  exit 1
+fi
+printf 'valid pull request path: %s -> main\n' "$head"

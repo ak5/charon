@@ -19,7 +19,7 @@ mise run check
 
 ## Pull requests
 
-Create a feature branch from `dev` and open the pull request against `dev`.
+Create a feature branch from `main` and open the pull request against `main`.
 A pull request is a proposal, not an entitlement to merge. Merge-ready work has
 a clear purpose, focused scope, passing checks, documentation parity, and an
 explicit account of security impact.
@@ -37,14 +37,18 @@ implementation rather than retain it, the pull request discussion and release
 notes SHOULD acknowledge the original proposal without claiming false commit
 authorship.
 
-## Releases and hotfixes
+## Merges and releases
 
-Only a release pull request from `dev` targets `main`. Maintainers MUST use a
-merge commit for that pull request so `dev` remains an ancestor of `main`.
-Squash and rebase release merges are prohibited.
+`main` is the only long-lived branch, the default branch, and the source of
+production container images. It remains protected and PR-only. Feature,
+dependency, and hotfix pull requests all target `main` and must pass its required
+checks. Maintainers SHOULD squash a single-result change and CAN use a merge
+commit when preserving contributor or integration ancestry matters. Do not
+rewrite shared history.
 
-Emergency `hotfix/*` branches CAN target `main`. After merging a hotfix,
-maintainers MUST merge `main` back into `dev` before the next release.
+A successful CI run for a push to `main` publishes immutable images tied to that
+exact commit. Merging makes a change releasable; deployment remains a separate
+operator action. There is no separate release-branch promotion step.
 
 ## Security reports
 

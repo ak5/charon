@@ -257,6 +257,13 @@ mise run check
 - [Infisical Agent Vault](docs/comparisons/infisical-agent-vault.md): when to use
   its credential-management workflows and when to use Charon with KeePass.
 
+## Contributing and releases
+
+Create feature branches from `main` and open pull requests to `main`. Required
+checks protect this single long-lived branch. Successful CI on merged commits
+publishes immutable container images; deployment remains an operator action.
+See [the contribution policy](CONTRIBUTING.md).
+
 ## Documentation
 
 - [Documentation index](docs/index.md)
