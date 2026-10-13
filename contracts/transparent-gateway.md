@@ -13,12 +13,12 @@ The only public reference syntax is `{{charon.<capability>}}`. A capability name
 is 1–128 ASCII letters, digits, dots, hyphens, or underscores. It cannot start
 or end with a dot or contain consecutive dots. The complete reference is at
 most 256 bytes. Nested, concatenated, partial, malformed, oversized, and unknown
-references are denied before provider resolution.
+references are denied before credential resolution.
 
 A reference names local policy. It never names a provider, account, secret,
-Vaultwarden item, environment variable, or credential. Policy binds the
+KeePass entry or credential. Policy binds the
 capability to one realm persona, service, exact destination, methods, exact
-paths, hydration sink, formatting rule, provider reference, response mode, and
+paths, hydration sink, formatting rule, credential reference, response mode, and
 resource limits.
 
 ## Workload identity and transport
@@ -101,7 +101,7 @@ a fail-closed response. Cookies and authentication/session headers are removed.
 The optional explicit-proxy journal and mandatory transparent-gateway journal
 contain only the closed metadata shape in `data-plane-receipt.schema.json`.
 They contain no headers, queries, request bodies, response bodies, arguments,
-results, provider references, credentials, or memory content. The asynchronous
+results, credential references, credentials, or memory content. The asynchronous
 queue is bounded. An unhealthy or full queue denies a new request before
 credential resolution; a queue failure after partial delivery is logged as
 `receipt_lost` and cannot retract already delivered bytes.
@@ -118,16 +118,16 @@ checkpoint is atomically replaced and its directory is synced.
 
 ## Ownership and correlation
 
-Charon owns this generic broker, policy validation, provider calls, hydration,
+Charon owns this generic broker, policy validation, KeePass lookups, hydration,
 response mediation, and data-plane receipts. An application integration owns
 which capabilities a workload may reference. Infra owns isolated routing,
 direct-egress denial, listener reachability, UDP/QUIC rejection, image pins, CA
-deployment, provider mappings, filesystem ownership, and convergence. The
+deployment, KeePass mappings, filesystem ownership, and convergence. The
 secret store owns private values.
 
 For the Hermes deployment specifically, `hermes-config` owns the capability
 references made available to Hermes; Infra owns routing, immutable image pins,
-CA deployment, provider mappings, and host convergence; and Vaultwarden owns
+CA deployment, KeePass mappings, and host convergence; and the operator owns
 the private values. None of that deployment data belongs in this repository.
 
 Hermes tool admission, Hermes's dangerous-command human approval, Charon

@@ -7,7 +7,7 @@ and `charon --gateway-config /etc/charon/hermes-gateway.toml`; do not pass this
 schema to `--config`. Validate the candidate against the exact released binary
 with `charon gateway validate /etc/charon/hermes-gateway.toml`.
 
-Infra owns Compose isolation, CA installation/trust, provider mappings, image
+Infra owns Compose isolation, CA installation/trust, KeePass mappings, image
 pins, Ansible, backup and cutover. Charon owns the protocol and validated schema.
 This repository neither modifies live infrastructure nor removes its full
 convergence guard. Config-only CD and the independent Hermes tool admission
@@ -84,10 +84,11 @@ a direct-egress lane when variables are absent or a library ignores them.
 
 For a caller-owned route, curl, gh and SDKs supply their usual credentials.
 For the example Git Basic grant, use fixed username `x-access-token` and the
-synthetic capability password `{{charon.github-git}}`. The private Git token
-is the Charon-only `CHARON_SYNTHETIC_GITHUB_TOKEN` provider value, never a client
-variable. Real deployments should map that reference through Vaultwarden and
-use protected provider inputs. No secret values belong in TOML or command logs.
+synthetic capability password `{{charon.github-git}}`. Charon resolves the private
+Git token from the KeePass entry mapped to local reference
+`CHARON_SYNTHETIC_GITHUB_TOKEN`. The client supplies only the route placeholder.
+Provision a private KDBX and unlock through the HTTPS admin page. No secret
+values belong in TOML or command logs.
 
 ## Feature verification and Infra handoff
 
@@ -110,7 +111,7 @@ and runs a real local intercepted CONNECT request against a generated CA and
 verified TLS fixture origin. It keeps Python's default strict flags, required
 certificate verification and hostname checks; checks trusted urllib/HTTPX,
 reuse, denied operations, untrusted CA and wrong hostname; and proves zero
-provider lookups. Linux CI runs the same required test. The normal Rust suite
+credential lookups. Linux CI runs the same required test. The normal Rust suite
 also checks the emitted CA/leaf roles, critical extensions and identifier link.
 
 The fixture upstream uses a separate synthetic CA and verified TLS; its local
@@ -122,11 +123,11 @@ captures:
 1. Validate its complete policy using the pinned image. Test OS, Python, curl,
    gh and SDK trust without disabling certificate validation.
 2. Send an ordinary secretless request; confirm streaming, session headers,
-   upload/download and no provider lookup. Send a typed credential reference
+   upload/download and no credential lookup. Send a typed credential reference
    and assert the fixture origin receives hydration only at its permitted sink.
 3. Reuse one TLS tunnel for an allowed request, a denied operation, another
    allowed request, and a mismatched authority. Test HTTP/2 separately. Denials
-   must happen before provider work.
+   must happen before credential lookup.
 4. Assert unknown hosts, metadata/private DNS, alternate ports, wrong SNI,
    untrusted upstream TLS, nested CONNECT, compression, and WebSocket upgrades
    fail closed. Follow a redirect only by a separately authorized request.

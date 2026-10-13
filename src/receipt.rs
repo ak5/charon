@@ -18,7 +18,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::mpsc;
 use zeroize::Zeroize;
 
-use crate::{config::ReceiptConfig, provider::ensure_private_file};
+use crate::{config::ReceiptConfig, keepass::ensure_private_file};
 
 const MAX_RECEIPT_LINE_BYTES: usize = 64 * 1024;
 

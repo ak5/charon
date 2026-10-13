@@ -1,64 +1,23 @@
 //! Disposable two-persona realm isolation fixture.
 
+mod common;
 use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
-use async_trait::async_trait;
 use axum::{Router, http::HeaderMap, routing::any};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use charon::{
-    config::{
-        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ServicePolicy,
-    },
+    config::{CapabilityPolicy, Config, IdentityConfig, RealmConfig, ServicePolicy},
     identity::WorkloadClaims,
-    provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
+    keepass::KeePassStore,
     proxy::{AppState, app},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
-use secrecy::SecretString;
 use serde_json::Value;
 use tokio::net::TcpListener;
-
-struct DisposableProvider {
-    value: SecretString,
-    unavailable: AtomicBool,
-}
-
-impl DisposableProvider {
-    fn new(value: &str) -> Self {
-        Self {
-            value: SecretString::from(value),
-            unavailable: AtomicBool::new(false),
-        }
-    }
-
-    fn set_unavailable(&self, unavailable: bool) {
-        self.unavailable.store(unavailable, Ordering::SeqCst);
-    }
-}
-
-#[async_trait]
-impl SecretProvider for DisposableProvider {
-    async fn health(&self) -> ProviderResult<()> {
-        if self.unavailable.load(Ordering::SeqCst) {
-            return Err(ProviderError::Unavailable);
-        }
-        Ok(())
-    }
-
-    async fn resolve(&self, _secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
-        if self.unavailable.load(Ordering::SeqCst) {
-            return Err(ProviderError::Unavailable);
-        }
-        Ok(self.value.clone())
-    }
-}
 
 fn signing_key() -> SigningKey {
     SigningKey::from_bytes(&[31_u8; 32])
@@ -109,7 +68,8 @@ fn realm_config(address: std::net::SocketAddr, realm: &str, tenant: &str, person
         },
         listen: address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config(persona),
+        admin: None,
         tls: None,
         identity: IdentityConfig {
             issuer: "fixture-control-plane".into(),
@@ -145,7 +105,7 @@ async fn spawn_realm(
     realm: &str,
     tenant: &str,
     persona: &str,
-    provider: Arc<DisposableProvider>,
+    provider: Arc<KeePassStore>,
 ) -> Result<std::net::SocketAddr> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -186,8 +146,14 @@ async fn two_persona_realms_fail_closed_and_fail_independently() -> Result<()> {
     }));
     tokio::spawn(async move { axum::serve(upstream_listener, upstream).await });
 
-    let alice_provider = Arc::new(DisposableProvider::new("alice-fixture-value"));
-    let bob_provider = Arc::new(DisposableProvider::new("bob-fixture-value"));
+    let alice_provider = Arc::new(common::store(std::collections::HashMap::from([(
+        "CHARON_FIXTURE_ALICE".into(),
+        "alice-fixture-value".into(),
+    )]))?);
+    let bob_provider = Arc::new(common::store(std::collections::HashMap::from([(
+        "CHARON_FIXTURE_BOB".into(),
+        "bob-fixture-value".into(),
+    )]))?);
     let alice = spawn_realm(
         "realm-alice",
         "tenant-fixture",
@@ -276,7 +242,7 @@ async fn two_persona_realms_fail_closed_and_fail_independently() -> Result<()> {
             .is_success()
     );
 
-    alice_provider.set_unavailable(true);
+    alice_provider.lock()?;
     assert_eq!(
         reqwest::get(format!("http://{alice}/readyz"))
             .await?

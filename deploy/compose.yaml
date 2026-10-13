@@ -12,12 +12,14 @@ services:
       - /tmp:mode=1777,size=16m
     ports:
       - "${CHARON_BIND_IP:?set CHARON_BIND_IP to the approved internal address}:3129:3129"
-    environment:
-      CHARON_TEST_CREDENTIAL: ${CHARON_TEST_CREDENTIAL:?set a disposable test credential}
-      RUST_LOG: charon=info
+      - "${CHARON_ADMIN_BIND_IP:?set the owner admin address}:8444:8444"
     volumes:
       - ./charon.toml:/etc/charon/charon.toml:ro
       - ./receipts:/var/lib/charon/receipts
+      - ./vault.kdbx:/var/lib/charon/vault.kdbx:ro
+      - ./admin-state:/var/lib/charon/admin
+      - ./admin-tls/fullchain.pem:/etc/charon/admin/fullchain.pem:ro
+      - ./admin-tls/privkey.pem:/run/credentials/charon-admin-key.pem:ro
     healthcheck:
       test: ["CMD", "/usr/local/bin/charon", "healthcheck", "http://127.0.0.1:3129/healthz"]
       interval: 10s
