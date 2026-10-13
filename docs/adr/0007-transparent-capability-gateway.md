@@ -27,7 +27,7 @@ workload binding.
 Applications use canonical `{{charon.<capability>}}` references in one typed
 policy sink. The reference names only local policy. Authorization completes
 before the provider receives its opaque policy reference. Existing
-`SecretProvider`, exact service/capability policy, TLS authority, request
+`KeePassStore`, exact service/capability policy, TLS authority, request
 forwarder, redirect denial, and size guards remain canonical; there is no
 parallel proxy or provider system.
 

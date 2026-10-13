@@ -1,9 +1,9 @@
 //! Exclusive-workload explicit proxy: independent of signed-manifest listeners.
 
 use crate::{
-    config::{ProviderConfig, RealmConfig, ReceiptConfig, TlsConfig},
+    config::{KeePassConfig, RealmConfig, ReceiptConfig, TlsConfig},
     dns::PinnedResolver,
-    provider::{SecretProvider, SecretRef},
+    keepass::{KeePassStore, SecretRef},
     receipt::{DataPlaneReceipt, ReceiptJournal, ReceiptOutcome, receipt_stream},
     response::{guard_stream, redact_text_stream},
     tls::TlsAuthority,
@@ -42,8 +42,10 @@ pub struct GatewayConfig {
     pub exclusive_network: bool,
     /// Interception CA; there is no splice mode.
     pub tls: TlsConfig,
-    /// Provider instantiated only for policy-owned credential mediation.
-    pub provider: ProviderConfig,
+    /// Concrete `KeePass` store configuration for policy-owned credential mediation.
+    pub keepass: KeePassConfig,
+    /// Separate HTTPS administration and interactive unlock configuration.
+    pub admin: Option<crate::admin::AdminConfig>,
     /// Required durable metadata journal.
     pub receipts: ReceiptConfig,
     /// Exact-host operation grants, evaluated for every request.
@@ -287,24 +289,26 @@ impl GatewayConfig {
                     route.scheme == "https" && !reference.is_empty() && reference.len() <= 256,
                     "invalid credential route"
                 );
-                match &self.provider {
-                    ProviderConfig::Environment => ensure!(
-                        reference.starts_with("CHARON_")
-                            && reference
-                                .bytes()
-                                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
-                        "invalid environment reference"
-                    ),
-                    ProviderConfig::Vaultwarden(vault) => ensure!(
-                        vault
-                            .items
-                            .iter()
-                            .any(|i| &i.secret_ref == reference && i.persona == self.realm.persona),
-                        "unmapped realm credential"
-                    ),
-                }
+                ensure!(
+                    self.keepass
+                        .items
+                        .iter()
+                        .any(|i| &i.secret_ref == reference && i.persona == self.realm.persona),
+                    "unmapped realm credential"
+                );
             }
         }
+        if let Some(admin) = &self.admin {
+            admin.validate()?;
+            if let Some(telegram) = &admin.telegram {
+                telegram.validate_inventory(self.routes.iter().map(|r| r.name.as_str()))?;
+            }
+            ensure!(
+                admin.listen != self.listen,
+                "admin and proxy listeners must differ"
+            );
+        }
+        self.keepass.validate(&self.realm.persona)?;
         // Overlap must not let grant order change which credential is selected.
         for (index, left) in self.routes.iter().enumerate() {
             for right in &self.routes[index + 1..] {
@@ -341,7 +345,8 @@ pub struct Gateway {
     config: GatewayConfig,
     client: reqwest::Client,
     resolver: Arc<dyn reqwest::dns::Resolve>,
-    secrets: Arc<dyn SecretProvider>,
+    secrets: Arc<KeePassStore>,
+    approvals: Option<Arc<crate::telegram::Telegram>>,
     tls: Arc<TlsAuthority>,
     receipts: ReceiptJournal,
 }
@@ -349,7 +354,7 @@ impl Gateway {
     /// Build with verified upstream TLS, no ambient proxy, and public-only DNS.
     /// # Errors
     /// Invalid policy, CA, journal, or client construction fails startup.
-    pub fn new(config: GatewayConfig, secrets: Arc<dyn SecretProvider>) -> Result<Self> {
+    pub fn new(config: GatewayConfig, secrets: Arc<KeePassStore>) -> Result<Self> {
         config.validate()?;
         let hosts = config.routes.iter().map(|r| r.host.clone()).collect();
         let resolver: Arc<dyn reqwest::dns::Resolve> =
@@ -367,9 +372,16 @@ impl Gateway {
             client,
             resolver,
             secrets,
+            approvals: None,
             tls,
             receipts,
         })
+    }
+    /// Attach the optional local human-decision coordinator.
+    #[must_use]
+    pub fn with_approvals(mut self, approvals: Option<Arc<crate::telegram::Telegram>>) -> Self {
+        self.approvals = approvals;
+        self
     }
     /// Build a router for this exclusive listener only.
     pub fn router(self: Arc<Self>) -> Router {
@@ -381,7 +393,14 @@ impl Gateway {
             .route(
                 "/readyz",
                 axum::routing::get(|State(state): State<Arc<Gateway>>| async move {
-                    if state.receipts.is_healthy() {
+                    if state.receipts.is_healthy()
+                        && (state
+                            .config
+                            .routes
+                            .iter()
+                            .all(|route| matches!(route.mediation, Mediation::Forward))
+                            || state.secrets.health().is_ok())
+                    {
                         StatusCode::NO_CONTENT
                     } else {
                         StatusCode::SERVICE_UNAVAILABLE
@@ -643,8 +662,27 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
     .map_err(|_| anyhow::anyhow!("destination address denied"))?;
     ensure!(addresses.next().is_some(), "destination address denied");
     let mut protected = Vec::new();
+    ensure!(
+        state.approvals.is_some()
+            || state
+                .config
+                .admin
+                .as_ref()
+                .is_none_or(|admin| admin.telegram.is_none()),
+        "approval channel unavailable"
+    );
     match &route.mediation {
-        Mediation::Forward => {}
+        Mediation::Forward => {
+            if let Some(approvals) = &state.approvals {
+                timeout(
+                    Duration::from_secs(route.max_duration_seconds)
+                        .saturating_sub(started.elapsed()),
+                    approvals.authorize(&route.name, parts.method.as_str()),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("human approval timed out"))??;
+            }
+        }
         Mediation::Header {
             secret_ref,
             name,
@@ -657,12 +695,20 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
                     && headers.contains_key(name),
                 "typed capability reference required"
             );
-            let secret = timeout(
-                Duration::from_secs(route.max_duration_seconds).saturating_sub(started.elapsed()),
-                state.secrets.resolve(&SecretRef::from_policy(secret_ref)),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("credential mediation timed out"))??;
+            if let Some(approvals) = &state.approvals {
+                timeout(
+                    Duration::from_secs(route.max_duration_seconds)
+                        .saturating_sub(started.elapsed()),
+                    approvals.authorize(&route.name, parts.method.as_str()),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("human approval timed out"))??;
+            }
+            ensure!(
+                started.elapsed() < Duration::from_secs(route.max_duration_seconds),
+                "credential mediation timed out"
+            );
+            let secret = state.secrets.resolve(&SecretRef::from_policy(secret_ref))?;
             ensure!(
                 (8..=16384).contains(&secret.expose_secret().len()),
                 "credential bound violated"
@@ -693,12 +739,20 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
                     && headers.contains_key(http::header::AUTHORIZATION),
                 "typed Basic capability required"
             );
-            let secret = timeout(
-                Duration::from_secs(route.max_duration_seconds).saturating_sub(started.elapsed()),
-                state.secrets.resolve(&SecretRef::from_policy(secret_ref)),
-            )
-            .await
-            .map_err(|_| anyhow::anyhow!("credential mediation timed out"))??;
+            if let Some(approvals) = &state.approvals {
+                timeout(
+                    Duration::from_secs(route.max_duration_seconds)
+                        .saturating_sub(started.elapsed()),
+                    approvals.authorize(&route.name, parts.method.as_str()),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("human approval timed out"))??;
+            }
+            ensure!(
+                started.elapsed() < Duration::from_secs(route.max_duration_seconds),
+                "credential mediation timed out"
+            );
+            let secret = state.secrets.resolve(&SecretRef::from_policy(secret_ref))?;
             ensure!(
                 (8..=16384).contains(&secret.expose_secret().len()),
                 "credential bound violated"
@@ -839,3 +893,7 @@ impl Drop for Attempt {
 #[cfg(test)]
 #[path = "gateway_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/e2e/mod.rs"]
+mod e2e;

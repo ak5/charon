@@ -44,7 +44,7 @@ The runtime validates upstream certificates with platform trust and pins
 public IPv4 DNS addresses for the process lifetime. Literal IP routes, private,
 loopback, link-local, metadata, shared-address, benchmark, multicast, reserved,
 and IPv6 destinations are unavailable. Authorized DNS is checked before any
-provider lookup and the HTTP connector uses the same pin. Ambient proxy
+credential lookup and the HTTP connector uses the same pin. Ambient proxy
 variables cannot change Charon's upstream route. No upstream intermediary is
 configured in this mode. Infra owns DNS, public CA trust, and egress isolation.
 
@@ -66,7 +66,7 @@ ambiguities fail before lookup. Query values are forwarded only when allowed
 and are never recorded. Redirects are returned without following them; every
 caller-followed hop must pass a new request authorization.
 
-`mediation.kind = "forward"` performs **no secret-provider lookup or health
+`mediation.kind = "forward"` performs **no secret-credential lookup or health
 call**. Tokens in OAuth bodies, Telegram URL paths, and allowed caller-owned
 Authorization/cookies remain client-owned. Ordinary API requests need no
 capability placeholder. Explicit `caller_headers` permits the closed set
@@ -87,11 +87,25 @@ Credential grants are closed typed sinks:
 
 Authorization, framing, caller-header rules, capability sink presence, and
 public address checks complete before resolution. A client cannot choose a
-provider reference, inject into routing/framing, or ask for arbitrary string
+credential reference, inject into routing/framing, or ask for arbitrary string
 replacement. There is no global body/path replacement. Other typed sinks
 remain available through the signed/transparent contracts; this mode does not
 pretend to support them. Credential routes accept only credentials of 8–16384
-bytes. Provider failures return data-free denials.
+bytes. Store failures return data-free denials.
+
+## Owner administration and local approval
+
+The binary requires `[admin]` for the independent HTTPS owner listener, including
+in this mode. `[keepass]` maps exact entry UUIDs; a forwarding-only configuration
+still supplies `items = []`. See [owner operations](../docs/admin.md).
+
+Optional `[admin.telegram]` names exact route names requiring a fresh allow-once
+decision. Identity, operation, caller-header and credential-sink checks precede
+the prompt; the decision precedes lookup/forwarding. Denial, cancellation,
+capacity exhaustion, delivery failure and timeout return fixed denials. Approval
+waits count against `max_duration_seconds` and expire after at most two minutes.
+The bot uses direct Charon-only HTTPS egress, independent of workload proxy routes.
+It never receives request bodies, brokered values or master passwords.
 
 ## Streaming and sessions
 
@@ -99,7 +113,7 @@ Uploads and downloads use backpressure, cancellation, byte counts, total time
 and idle bounds. The example allows 256 MiB uploads and 1 GiB downloads; these
 are policy choices and do not change other listener modes. Unknown-length
 uploads can reach the origin partially before an overflow; streaming cannot
-retract a remote side effect. Total operation time includes provider/DNS work,
+retract a remote side effect. Total operation time includes approval waits, credential lookup and DNS work,
 upstream headers and upload. Body streams stop on overflow, idle timeout, total
 timeout, dependency error, or disconnect. Bodies are not buffered to completion.
 SSE/model responses stream through rolling byte redaction, without semantic
@@ -119,7 +133,7 @@ bypass redaction. WebSocket/101 upgrades fail closed.
 Authentication-Info, and X-Session-Token on caller-owned routes. They are not
 globally removed. Every retained header is checked for known brokered secret
 material. Credentials reflected in Location or another retained header deny
-the response. A provider credential cannot be returned as a session value.
+the response. A brokered credential cannot be returned as a session value.
 Charon is not a sanitizer for secrets already owned by the caller, including
 OAuth token responses; forwarding those to their owner is necessary behavior.
 
@@ -135,13 +149,15 @@ failures have fixed metadata log outcomes, without a request receipt.
 Streaming completion/cancellation uses the existing hash-chained journal.
 
 Errors and logs omit headers, tokens, URLs, prompts, bodies and provider
-references. Gateway commands enforce `off,charon=info` regardless of RUST_LOG
+references. All Charon commands enforce `off,charon=info` regardless of RUST_LOG
 so dependency transport debug logs cannot expose traffic. Embedders must apply
-the same logging restriction. The interception CA/key, provider credentials,
+the same logging restriction. The interception CA/key, KeePass credentials,
 and decrypted traffic remain within the trusted Charon boundary.
 
-`/healthz` and `/readyz` return 204 for process and journal availability; neither
-proves mediation, provider readiness, isolation, or client trust. Run the real
+`/healthz` returns 204 for process liveness. `/readyz` returns 204 when the receipt
+journal is healthy and, if any route mediates credentials, KeePass is unlocked;
+otherwise it returns 503. Pure forwarding gateways do not check the store.
+Neither probe verifies Telegram delivery, isolation, or client trust. Run the real
 TLS fixture suite (`mise exec -- cargo test gateway --lib`) and the deployment
 verification procedure in [`docs/hermes-gateway.md`](../docs/hermes-gateway.md).
 Never remove an Infra convergence guard based on generic liveness.

@@ -40,17 +40,19 @@ Before resolving a secret, Charon:
    and replay state;
 3. resolves the named capability from local policy;
 4. authorizes the concrete service, exact hostname, method, path, and injection
-   rule; and
+   rule;
 5. removes proxy authentication plus static and dynamically nominated
-   hop-by-hop headers.
+   hop-by-hop headers;
+6. verifies the capability reference in its declared sink and, when configured
+   for that capability, obtains a local Telegram allow-once decision.
 
 Only then may Charon pass the policy-owned opaque reference to its configured
-secret-store adapter.
+unlocked KeePass store.
 
 ## Credential rendering
 
 Local service policy defines a typed hydration sink, formatting rule, response
-mode, limits, and opaque provider reference. The workload supplies
+mode, limits, and opaque credential reference. The workload supplies
 `{{charon.<capability>}}` in that sink; the reference must name the same
 capability as the signed manifest. Caller-supplied routing and framing headers
 cannot be injection targets. The resolved value is never returned to the
@@ -66,7 +68,7 @@ Charon intentionally exposes coarse outcomes:
 | `401` | manifest missing, malformed, invalid, expired, replayed, or bound to another realm |
 | `403` | authenticated capability does not authorize the concrete operation |
 | `413` | configured request or response size limit exceeded |
-| `502` | authorized destination, egress, TLS, or secret-store dependency failed |
+| `502` | forwarding dependency, locked store, or local approval failed |
 
 Upstream response statuses otherwise pass through the policy-selected bounded
 streaming sanitizer described by `transparent-gateway.md`. No response

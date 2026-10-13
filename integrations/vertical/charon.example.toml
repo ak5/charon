@@ -10,18 +10,21 @@ url = "http://egress.example.internal:8888"
 username = "egress"
 password_file = "/run/credentials/egress-proxy-password"
 
-[provider]
-kind = "vaultwarden"
-cli_path = "/usr/local/bin/bw"
-appdata_dir = "/var/lib/charon/bitwarden-cli"
-session_file = "/run/credentials/charon-vaultwarden-session"
-cache_ttl_seconds = 5
+[keepass]
+database = "/var/lib/charon/vault.kdbx"
 
-[[provider.items]]
+[[keepass.items]]
 secret_ref = "github/vertical-developer"
 persona = "vertical-developer"
-# Replace with the exact disposable Vaultwarden item UUID.
-item_id = "00000000-0000-4000-8000-000000000001"
+# Replace with the exact disposable KeePass entry UUID.
+entry_id = "00000000-0000-4000-8000-000000000001"
+
+[admin]
+listen = "0.0.0.0:8444"
+origin = "https://charon.example.test:8444"
+certificate = "/etc/charon/admin/fullchain.pem"
+private_key = "/run/credentials/charon-admin-key.pem"
+passkeys_file = "/var/lib/charon/admin/passkeys.json"
 
 [tls]
 ca_certificate = "/run/charon-ca/ca.pem"

@@ -2,7 +2,8 @@
 
 This runbook applies to the optional external human-approval broker specified by
 ADR 0005. It is not deployed inside Charon and receives no credential-provider
-access.
+access. The separate in-process allow-once gate is configured through
+[owner operations](admin.md); this broker runbook does not configure that gate.
 
 ## Provisioning
 
@@ -15,7 +16,7 @@ access.
    audit correlation. Encrypt storage and backups with operator-managed keys.
 4. Create a Telegram bot with BotFather and inject its token only into the
    separate adapter as `CHARON_TELEGRAM_BOT_TOKEN`. Never print the token or
-   place it in the broker, Charon, workload images, repository settings, command
+   share it with the broker, Charon local gate, workload images, repository settings, command
    arguments, logs, probes, receipts, or messages.
 5. Set `CHARON_TELEGRAM_USER_ID` to one positive numeric user ID. `@userinfobot`
    can help discover it, but is an unrelated third-party bot: never send that
