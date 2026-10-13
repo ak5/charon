@@ -1,18 +1,15 @@
 //! Real local TLS fixtures for the exclusive workload gateway.
 use super::*;
-use crate::provider::{ProviderError, ProviderResult};
-use async_trait::async_trait;
 use http_body_util::BodyExt as _;
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::pem::PemObject as _;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{TcpListener, TcpStream},
 };
+use tower::ServiceExt as _;
 
 const SENTINEL: &str = "FAKE_SENTINEL_CREDENTIAL_0123456789";
-struct FakeProvider(AtomicUsize);
 struct PublicFixtureResolver;
 impl reqwest::dns::Resolve for PublicFixtureResolver {
     fn resolve(&self, _: reqwest::dns::Name) -> reqwest::dns::Resolving {
@@ -22,16 +19,6 @@ impl reqwest::dns::Resolve for PublicFixtureResolver {
                     as reqwest::dns::Addrs,
             )
         })
-    }
-}
-#[async_trait]
-impl SecretProvider for FakeProvider {
-    async fn resolve(&self, _: &SecretRef<'_>) -> ProviderResult<SecretString> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(SecretString::from(SENTINEL))
-    }
-    async fn health(&self) -> ProviderResult<()> {
-        Err(ProviderError::Unavailable)
     }
 }
 fn route(name: &str, path: &str, mediation: Mediation) -> Route {
@@ -55,7 +42,7 @@ fn route(name: &str, path: &str, mediation: Mediation) -> Route {
 struct Fixture {
     directory: tempfile::TempDir,
     gateway: Arc<Gateway>,
-    provider: Arc<FakeProvider>,
+    provider: Arc<KeePassStore>,
     address: SocketAddr,
     upstream_address: SocketAddr,
     ca: reqwest::Certificate,
@@ -68,8 +55,13 @@ impl Drop for Fixture {
         }
     }
 }
-#[allow(clippy::too_many_lines)]
 async fn fixture() -> Result<Fixture> {
+    fixture_with_approvals(None).await
+}
+#[allow(clippy::too_many_lines)]
+async fn fixture_with_approvals(
+    approvals: Option<Arc<crate::telegram::Telegram>>,
+) -> Result<Fixture> {
     let directory = tempfile::tempdir()?;
     let cert = directory.path().join("ca.pem");
     let key = directory.path().join("key.pem");
@@ -199,7 +191,8 @@ async fn fixture() -> Result<Fixture> {
         listen: address,
         exclusive_network: true,
         tls: tls_config,
-        provider: ProviderConfig::Environment,
+        keepass: crate::test_support::config("persona-test"),
+        admin: None,
         receipts: ReceiptConfig {
             journal_path: directory.path().join("receipts.jsonl"),
             state_path: directory.path().join("checkpoint"),
@@ -233,8 +226,13 @@ async fn fixture() -> Result<Fixture> {
             route("compressed-hop", "/compressed-hop", Mediation::Forward),
         ],
     };
-    let provider = Arc::new(FakeProvider(AtomicUsize::new(0)));
-    let mut gateway = Gateway::new(config, provider.clone())?;
+    let provider = Arc::new(crate::test_support::store(
+        std::collections::HashMap::from([
+            ("CHARON_SYNTHETIC_TEST".into(), SENTINEL.into()),
+            ("CHARON_TEST".into(), SENTINEL.into()),
+        ]),
+    )?);
+    let mut gateway = Gateway::new(config, provider.clone())?.with_approvals(approvals);
     gateway.resolver = Arc::new(PublicFixtureResolver);
     gateway.client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -300,7 +298,7 @@ async fn ordinary_clients_forward_stream_upload_and_keep_sessions_without_lookup
         .await?;
     assert_eq!(response.status(), 403);
     assert!(!response.text().await?.contains(SENTINEL));
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 #[tokio::test]
@@ -320,7 +318,7 @@ async fn hydration_is_typed_and_sentinel_never_reaches_errors_or_journal() -> Re
         assert_eq!(response.status(), 403);
         assert!(!response.text().await?.contains(SENTINEL));
     }
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     let response = client
         .get("https://allowed.test/credential")
         .header("authorization", "Bearer {{charon.credential}}")
@@ -337,7 +335,7 @@ async fn hydration_is_typed_and_sentinel_never_reaches_errors_or_journal() -> Re
         .await?;
     assert_eq!(response.status(), 403);
     assert!(!response.text().await?.contains(SENTINEL));
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 2);
+    assert_eq!(f.provider.lookup_count(), 2);
     tokio::time::sleep(Duration::from_millis(50)).await;
     let journal = std::fs::read_to_string(&f.gateway.config.receipts.journal_path)?;
     assert!(!journal.contains(SENTINEL));
@@ -394,7 +392,7 @@ async fn reusable_tls_connection_reauthorizes_each_request_and_authority() -> Re
         assert_eq!(response.status().as_u16(), status);
         response.into_body().collect().await?;
     }
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     task.abort();
     Ok(())
 }
@@ -430,7 +428,7 @@ async fn unsupported_protocols_and_compression_fail_closed() -> Result<()> {
         response.into_body().collect().await?;
     }
     task.abort();
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 #[test]
@@ -468,7 +466,7 @@ async fn streaming_delivers_before_completion_and_basic_is_a_typed_sink() -> Res
     assert!(first.is_some());
     let rest = response.text().await?;
     assert!(rest.contains("streaming"));
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     let response = client
         .get("https://allowed.test/basic")
         .basic_auth("fixed-user", Some("{{charon.basic}}"))
@@ -478,7 +476,7 @@ async fn streaming_delivers_before_completion_and_basic_is_a_typed_sink() -> Res
     let body = response.text().await?;
     assert!(!body.contains(SENTINEL));
     assert!(body.contains("[REDACTED]"));
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 1);
+    assert_eq!(f.provider.lookup_count(), 1);
     Ok(())
 }
 
@@ -551,7 +549,7 @@ async fn http2_reuse_reauthorizes_authority_and_sni_is_required() -> Result<()> 
     }
     task.abort();
     assert!(tunnel(&f, "wrong.test", Vec::new()).await.is_err());
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 
@@ -573,7 +571,7 @@ async fn rejects_private_dns_before_provider_and_invalid_upstream_tls() -> Resul
     )
     .await;
     assert_eq!(response.status(), 403);
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     let no_trust = reqwest::Client::builder()
         .no_proxy()
         .proxy(reqwest::Proxy::all(format!("http://{}", f.address))?)
@@ -605,7 +603,7 @@ async fn rejects_private_dns_before_provider_and_invalid_upstream_tls() -> Resul
     )
     .await;
     assert_eq!(response.status(), 403);
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 
@@ -696,7 +694,7 @@ async fn configured_upload_and_download_bounds_are_enforced() -> Result<()> {
     )
     .await;
     assert_eq!(response.status(), 403);
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     let response = handle(
         &gateway,
         Request::builder()
@@ -710,7 +708,7 @@ async fn configured_upload_and_download_bounds_are_enforced() -> Result<()> {
             .await
             .is_err()
     );
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 
@@ -753,7 +751,7 @@ async fn python_313_strict_clients_accept_generated_chain() -> Result<()> {
         String::from_utf8(output.stdout)?.contains("PASS:"),
         "client proof missing"
     );
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 
@@ -823,7 +821,7 @@ async fn intercepted_chain_has_explicit_ca_and_server_certificate_roles() -> Res
         subject_id(&leaf).context("leaf subject key ID missing")?,
         [] as [u8; 0]
     );
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     Ok(())
 }
 #[tokio::test]
@@ -848,7 +846,7 @@ async fn unmodified_curl_and_gh_use_standard_proxy_and_credential_settings() -> 
         .await?;
     ensure!(curl_output.status.success(), "synthetic curl proof failed");
     assert!(String::from_utf8(curl_output.stdout)?.contains("data: /plain"));
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 0);
+    assert_eq!(f.provider.lookup_count(), 0);
     // Go's macOS certificate verifier in existing gh builds uses Keychain,
     // not SSL_CERT_FILE. Exercise gh in Linux CI without installing a test CA
     // into the operator's system trust or disabling certificate verification.
@@ -878,6 +876,79 @@ async fn unmodified_curl_and_gh_use_standard_proxy_and_credential_settings() -> 
     let body = String::from_utf8(gh_output.stdout)?;
     assert!(!body.contains(SENTINEL));
     assert!(body.contains("[REDACTED]"));
-    assert_eq!(f.provider.0.load(Ordering::SeqCst), 1);
+    assert_eq!(f.provider.lookup_count(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn human_decision_precedes_credential_lookup_and_cannot_widen_policy() -> Result<()> {
+    let approvals = crate::telegram::Telegram::test_coordinator(vec!["credential".into()])?;
+    let fixture = fixture_with_approvals(Some(approvals.clone())).await?;
+    let client = client(&fixture)?;
+    let response = client
+        .get("https://allowed.test/credential")
+        .header("authorization", "Bearer {{charon.wrong}}")
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(approvals.test_pending_count()?, 0);
+    assert_eq!(fixture.provider.lookup_count(), 0);
+    for allow in [false, true] {
+        let request = client
+            .get("https://allowed.test/credential")
+            .header("authorization", "Bearer {{charon.credential}}");
+        let waiting = tokio::spawn(async move { request.send().await });
+        for _ in 0..1000 {
+            if approvals.test_pending_count()? > 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(approvals.test_pending_count()?, 1);
+        assert_eq!(fixture.provider.lookup_count(), 0);
+        assert_eq!(approvals.test_decide_next(allow).await?, "credential");
+        let response = waiting.await??;
+        assert_eq!(
+            response.status(),
+            if allow {
+                StatusCode::OK
+            } else {
+                StatusCode::FORBIDDEN
+            }
+        );
+        assert!(!response.text().await?.contains(SENTINEL));
+    }
+    assert_eq!(fixture.provider.lookup_count(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn credential_gateway_readiness_requires_unlock() -> Result<()> {
+    let fixture = fixture().await?;
+    let client = reqwest::Client::builder().no_proxy().build()?;
+    let url = format!("http://{}/readyz", fixture.address);
+    assert_eq!(
+        client.get(&url).send().await?.status(),
+        StatusCode::NO_CONTENT
+    );
+    fixture.provider.lock()?;
+    assert_eq!(
+        client.get(url).send().await?.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let mut config = fixture.gateway.config.clone();
+    config
+        .routes
+        .retain(|route| matches!(route.mediation, Mediation::Forward));
+    let gateway = Arc::new(Gateway::new(config, fixture.provider.clone())?);
+    let response = gateway
+        .router()
+        .oneshot(
+            http::Request::builder()
+                .uri("/readyz")
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
     Ok(())
 }

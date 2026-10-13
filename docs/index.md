@@ -5,6 +5,8 @@ Start with the document that owns the question you are trying to answer.
 ## Use and operate Charon
 
 - [README](../README.md): product overview and fastest development path.
+- [Telegram/BotFather setup](telegram-setup.md): bot creation, owner ID and live approval testing.
+- [Owner enrollment and vault operations](admin.md): HTTPS setup, passkeys, unlock, recovery, and Telegram decisions.
 - [Deployment](deployment.md): deployment configuration and operating steps.
 - [Hermes single outbound gateway](hermes-gateway.md): exclusive-workload
   explicit proxy, exact destination inventory and deployment verification.
@@ -20,6 +22,10 @@ Start with the document that owns the question you are trying to answer.
   admission, receipts, and deployment.
 - [Hermes v2026.8.3 compatibility](hermes-v2026.8.3-compatibility.md): exact
   Telegram inventory, classifications, runtime gates, and upgrade contract.
+
+## Compare alternatives
+
+- [Infisical Agent Vault and Charon](comparisons/infisical-agent-vault.md): practical selection guide.
 
 ## Understand the design
 
@@ -41,5 +47,4 @@ Start with the document that owns the question you are trying to answer.
   documentation ownership, scratch space, and bootstrap choices.
 - [Exclusive gateway implementation review](security-review-workload-gateway.md):
   reviewed boundaries, regression evidence and deployment limitations.
-- [Security audit](security-audit-2026-07-27.md): current audit evidence and
-  residual risks.
+- [KeePass/admin verification](security-verification-keepass-admin.md): implementation evidence and deployment verification limits.

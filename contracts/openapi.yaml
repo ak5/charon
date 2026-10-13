@@ -3,7 +3,9 @@ info:
   title: Charon runtime probe API
   version: 1.0.0
   description: >
-    Liveness and credential-free readiness endpoints. Charon's forward-proxy
+    Signed/transparent listener liveness and credential-free readiness endpoints.
+    The exclusive gateway returns bodyless 204/503 readiness, documented in
+    workload-gateway.md. Owner administration is documented in admin.md. Charon's forward-proxy
     data plane and external reconciler are separate protocols and are not
     represented as REST operations.
 paths:
@@ -17,16 +19,16 @@ paths:
   /readyz:
     get:
       operationId: getReadiness
-      summary: Report realm identity, provider, and receipt-writer readiness
+      summary: Report realm identity, KeePass store, and receipt-writer readiness
       responses:
         "200":
-          description: Configured provider and receipt writer are ready without resolving a secret
+          description: KeePass is unlocked and the configured receipt writer is healthy, without resolving a secret
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Readiness"
         "503":
-          description: Provider or receipt writer is unavailable
+          description: KeePass is locked/unavailable or the configured receipt writer is unhealthy
           content:
             application/json:
               schema:

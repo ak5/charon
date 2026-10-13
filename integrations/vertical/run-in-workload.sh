@@ -53,13 +53,13 @@ else
 fi
 
 if GH_TOKEN='{{charon.github-read-user}}' \
-    HTTPS_PROXY="$(proxy provider-failure charon-locked)" \
+    HTTPS_PROXY="$(proxy store-locked charon-locked)" \
     SSL_CERT_FILE=/etc/charon-ca/ca.pem \
-    gh api user >/tmp/provider.out 2>/tmp/provider.err; then
-    result provider-failure unexpected-allow
+    gh api user >/tmp/store.out 2>/tmp/store.err; then
+    result store-locked unexpected-allow
     exit 1
 else
-    result provider-failure denied
+    result store-locked denied
 fi
 
 if HTTPS_PROXY='' HTTP_PROXY='' ALL_PROXY='' NO_PROXY='*' \

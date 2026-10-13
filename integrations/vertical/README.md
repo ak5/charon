@@ -1,101 +1,67 @@
-# Secretless GitHub vertical fixture
+# GitHub vertical fixture
 
-This fixture runs an unmodified `gh api user` in a disposable workload that has
-only `gh`, curl, a public Charon CA, public capability references, and fresh workload
-manifests. It mounts no GitHub or Vaultwarden credential. Its only Docker network
-is `internal`; Charon alone also joins the upstream network and is configured to
-chain allowed requests through an operator-configured egress proxy. The example
-uses the reserved name `egress.example.internal:8888`.
+This operator-run fixture sends an unmodified `gh api user` through Charon. The
+workload receives only public CA trust, capability references and fresh signed
+manifests. It mounts no credential database, master password, admin state or
+private key. Its Docker network is internal; Charon alone joins the upstream
+network and chains through an operator-configured egress proxy.
 
-## Inputs
-
-Prepare a disposable GitHub credential with read-only access sufficient for
-`GET /user` and store it as the password of a dedicated Vaultwarden login item.
-Do not put the value in this directory, Compose, an image, or an environment
-variable. Initialize a fresh ignored runtime directory with the exact item UUID:
+Prepare a disposable read-only GitHub credential sufficient for `GET /user` in
+a dedicated protected KeePass Password field. Keep its private KDBX outside this
+repository. Initialize a fresh operator-owned directory with the entry UUID:
 
 ```sh
-cargo run --locked --example vertical_fixture -- \
-  init .vertical-runtime <vault-item-uuid>
+cargo run --locked --example vertical_fixture -- init /protected/vertical-runtime <keepass-entry-uuid>
 ```
 
-This creates a fresh offline root, a root-signed persona intermediate,
-workload-identity key, reviewed config, and manifest directory without printing
-private material. The root private key remains in the operator-only fixture
-directory and is never mounted into Charon or the workload. Initialization
-refuses to replace an existing directory. Remove the directory after the proof.
+Initialization creates an offline root, persona intermediate, identity issuer
+key and config without printing private keys. The offline root key and issuer
+key remain outside containers. Review the generated config, including egress
+address and admin origin. Supply a browser-trusted certificate and independent
+private TLS key matching that stable origin. No KDBX master password is written
+to disk or passed as an environment variable.
 
-Download the pinned Linux-native CLI matching the immutable image's `linux/amd64`
-platform. The helper verifies the exact SHA-256 digest published in Bitwarden's
-GitHub release metadata and refuses to replace an existing file:
-
-```sh
-integrations/vertical/prepare-linux-bw.sh \
-  "$PWD/.vertical-runtime/bin/bw"
-```
-
-Provide absolute host paths and an immutable Charon image:
+Set absolute paths and an immutable Charon image:
 
 ```sh
 export CHARON_IMAGE=ghcr.io/<owner>/<repository>:sha-<40-character-main-commit>
-export CHARON_FIXTURE_DIRECTORY="$PWD/.vertical-runtime"
-export CHARON_BW_CLI_PATH="$PWD/.vertical-runtime/bin/bw"
-export CHARON_BW_APPDATA_PATH=/protected/bitwarden-cli
-export CHARON_BW_SESSION_PATH=/run/user/<uid>/charon-vaultwarden-session
-export CHARON_EGRESS_PROXY_PASSWORD_PATH=/run/user/<uid>/charon-egress-password
-```
-
-The harness creates a private receipt-state directory inside the disposable
-fixture directory and mounts it only into Charon. Receipts contain metadata,
-not request/response bodies or credential values.
-
-The native `bw` binary is pinned to 2026.6.0 and checksum-verified. The
-appdata directory contains the encrypted vault and exact Vaultwarden server
-selection. The session should be memory-backed. The appdata, session, generated
-config, and CA/issuer private keys are owned by the invoking operator UID;
-Charon runs as that UID so protected mode-`0400` mounts remain readable without
-broadening host permissions. None of their parent directories is mounted into
-the workload.
-
-If the configured egress proxy requires authentication, provision a dedicated,
-least-privilege password through the operator's secret-delivery process. Write
-only the password value to `CHARON_EGRESS_PROXY_PASSWORD_PATH` with mode `0400`.
-Charon reads it into a secret-holding value and configures proxy Basic auth; it
-is not embedded in a URL, config, environment variable, command argument, or
-log.
-
-The workload trusts only `root-ca.pem`; Charon serves its persona intermediate
-with each leaf. The harness builds the workload first, then issues five value-only manifest
-files named `allowed`, `forbidden-host`, `forbidden-operation`, `expired`, and
-`provider-failure` immediately before startup. They bind persona
-`vertical-developer` and capability `github-read-user`, use unique random
-nonces, target the integration issuer/audience, and expire within 50 seconds.
-The issuer key remains outside Charon and every container.
-
-Run immediately after issuance:
-
-```sh
+export CHARON_FIXTURE_DIRECTORY=/protected/vertical-runtime
+export CHARON_KDBX_PATH=/protected/disposable.kdbx
+export CHARON_ADMIN_CERTIFICATE_PATH=/protected/admin/fullchain.pem
+export CHARON_ADMIN_PRIVATE_KEY_PATH=/protected/admin/privkey.pem
+export CHARON_ADMIN_BIND_IP=<owner-only-listener-ip>
+export CHARON_EGRESS_PROXY_PASSWORD_PATH=/protected/egress-password
 integrations/vertical/run.sh
 ```
 
-## Assertions and evidence
+Provision all private inputs under the invoking operator UID with mode 0400 or
+0600. Charon runs as that UID. The script creates separate private receipt and
+public-registration directories for the primary and locked instances. The
+workload receives none of those directories. Egress credentials are optional in
+Charon generally; this specific fixture config uses protected Basic-auth egress.
 
-The workload checks one allow and five denies: forbidden host, forbidden
-operation, expired identity, locked provider, and direct bypass. The second
-Charon instance intentionally lacks the session mount for the locked-provider
-case. Both Charon instances have upstream access; the workload network itself
-has no external route.
+The script starts both instances locked, prints only the primary enrollment
+console line, and waits while you enroll a passkey and unlock through HTTPS.
+It checks primary readiness and verifies the second instance is unready,
+then issues fresh manifests, and immediately runs the
+workload. The second instance remains locked and publishes no owner port. Its
+public registration and receipt files are isolated from the primary instance.
 
-The harness preserves `cases.jsonl`, the stopped workload's Docker inspect, and
-Charon's redacted logs under `integrations/vertical/evidence` (or
-`CHARON_EVIDENCE_DIRECTORY`). It fails if inspect/log output contains known
-GitHub token prefixes, provider/CA-private inputs, a manifest, the public
-capability reference, or the fixture sentinel. It also checks that exactly one allow and
-five denies were recorded. Review the Charon events to correlate realm, tenant,
-persona, workspace, lease, workload, operation, generation, capability,
-service, method, path, status, and outcome without bearer material.
+The assertions cover one allow and five denials: unknown destination, forbidden
+operation, expired identity, locked store and direct bypass. Manifests bind the
+`vertical-developer` persona and `github-read-user` capability and expire within
+50 seconds. The workload trusts only the generated root certificate.
 
-The fixture must run only on an operator-controlled host with Docker and access
-to the configured secret store and egress proxy, never on pull requests from
-untrusted code. The owner review in
-`docs/security-review-connect-interception.md` is complete.
+Evidence includes outcome JSONL, container/image inspection and redacted Charon
+logs. Enrollment-code lines are removed before writing evidence. Prefix and
+manifest scans reject credential-like artifacts. Docker console logs themselves
+are private operator material; do not export them into shared logging. The
+script removes its containers on exit and leaves operator-owned fixture inputs
+and evidence for review. Both containers listen on admin port 8444 internally;
+Infra must deny workload-to-admin traffic on that port. Host publication alone
+does not establish this isolation. Remove disposable credentials and keys under your own
+retention policy after the proof.
+
+Run only on an operator-controlled Docker host with approved upstream access.
+The Rust suite independently exercises synthetic encrypted KDBX, passkeys,
+authorization, TLS and callback rejection without requiring a live bot or token.

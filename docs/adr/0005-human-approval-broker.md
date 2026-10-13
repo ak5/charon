@@ -35,10 +35,12 @@ integrating control plane and its workload-identity issuer:
    lease and policy generation, then mints a fresh Charon manifest for exactly
    one operation.
 
-Charon does not receive approval requests, decisions, rules, assertions,
-Telegram messages, or callbacks. It continues verifying workload manifests
-offline and independently enforcing concrete service, hostname, method, path,
-and injection policy.
+Charon does not receive this external broker's normalized requests, reusable
+rules or signed assertions. It verifies workload manifests offline and enforces
+concrete service, hostname, method, path and injection policy. Its optional local
+Telegram allow-once gate, defined in [ADR 0004](0004-keepass-store.md), can narrow
+those grants after manifest verification. That gate has no reusable rule or
+assertion authority and uses a separate dedicated bot token.
 
 The versioned contracts are:
 
@@ -70,7 +72,8 @@ content is non-reusable and requires a higher-risk allow-once confirmation.
   scope. Account takeover remains an external authorization risk.
 - **Identity issuer:** trusts the broker's dedicated public key but must recheck
   current lifecycle and policy state before minting a manifest.
-- **Charon:** trusts only its existing issuer key and local policy; approval
+- **Charon:** verifies the issuer key and local policy, then any configured
+  local allow-once gate; external approval
   cannot widen a Charon capability.
 
 The broker API uses operator-managed mutual TLS identities. Issuers and
@@ -164,8 +167,9 @@ signatures, keys, credentials, provider references, and Telegram bot tokens.
 
 ## Rejected alternatives
 
-- **Telegram inside Charon:** would add an online chat dependency to the
-  credential data plane and hold requests open near resolved credentials.
+- **Reusable grant engine inside Charon:** would couple durable rule and issuer
+  authority to the credential data plane. Local allow-once gates remain bounded
+  and wait before credential resolution.
 - **Telegram as policy engine:** presentation text and callback buttons are not
   canonical authorization inputs.
 - **Issuer-internal unsigned decision:** prevents independently verifiable
