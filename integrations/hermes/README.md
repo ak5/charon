@@ -109,7 +109,7 @@ agent:
 Run both containers as UID/GID `10000:10000`. Mount one dedicated socket volume
 at `/run/charon-hermes` in both containers. Mount the read-only policy and a
 private receipt-state volume only in the admission container. Do not share
-Docker's socket, Charon manifests, Vaultwarden state, provider references, or
+Docker's socket, Charon manifests, KeePass state, credential references, or
 credentials.
 
 ```text
@@ -203,3 +203,12 @@ CI checks out the immutable upstream commit and fails if its Telegram inventory
 contains an unclassified tool, the recommended policy is incomplete, the
 reviewed classification digest changes, or the real `PluginContext` hook API is
 incompatible.
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](../../contracts/workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

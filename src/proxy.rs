@@ -26,7 +26,7 @@ use crate::{
     config::{Config, ServicePolicy},
     dns::PinnedResolver,
     identity::{AuthorizedWorkload, IDENTITY_HEADER, IdentityVerifier},
-    provider::{SecretProvider, SecretRef, ensure_private_file},
+    keepass::{KeePassStore, SecretRef, ensure_private_file},
     receipt::{DataPlaneReceipt, ReceiptJournal, ReceiptOutcome, receipt_stream},
     response::{
         guard_stream, redact_text_stream, sanitize_headers, sanitize_json_document,
@@ -54,7 +54,8 @@ const HOP_BY_HOP_HEADERS: [&str; 10] = [
 pub struct AppState {
     config: Config,
     client: Client,
-    secrets: Arc<dyn SecretProvider>,
+    secrets: Arc<KeePassStore>,
+    approvals: Option<Arc<crate::telegram::Telegram>>,
     identities: IdentityVerifier,
     tls: Option<Arc<TlsAuthority>>,
     receipts: Option<ReceiptJournal>,
@@ -67,7 +68,7 @@ impl AppState {
     ///
     /// Returns an error for invalid policy, upstream-proxy configuration, or
     /// HTTP client construction failure.
-    pub fn new(config: Config, secrets: Arc<dyn SecretProvider>) -> Result<Self> {
+    pub fn new(config: Config, secrets: Arc<KeePassStore>) -> Result<Self> {
         config.validate()?;
         let service_hosts = config
             .services
@@ -119,10 +120,17 @@ impl AppState {
             config,
             client,
             secrets,
+            approvals: None,
             identities,
             tls,
             receipts,
         })
+    }
+    /// Attach the optional local human-decision coordinator.
+    #[must_use]
+    pub fn with_approvals(mut self, approvals: Option<Arc<crate::telegram::Telegram>>) -> Self {
+        self.approvals = approvals;
+        self
     }
 }
 
@@ -374,7 +382,7 @@ async fn readiness(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         persona: state.config.realm.persona.clone(),
         generation: state.config.realm.generation,
     };
-    if state.secrets.health().await.is_err() {
+    if state.secrets.health().is_err() {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             axum::Json(Readiness {
@@ -504,10 +512,23 @@ async fn forward_inner_as(
         return Ok((StatusCode::FORBIDDEN, "capability reference is missing").into_response());
     }
 
+    anyhow::ensure!(
+        state.approvals.is_some()
+            || state
+                .config
+                .admin
+                .as_ref()
+                .is_none_or(|admin| admin.telegram.is_none()),
+        "approval channel unavailable"
+    );
+    if let Some(approvals) = &state.approvals {
+        approvals
+            .authorize(&identity.capability, parts.method.as_str())
+            .await?;
+    }
     let secret = state
         .secrets
-        .resolve(&SecretRef::from_policy(&policy.secret_ref))
-        .await?;
+        .resolve(&SecretRef::from_policy(&policy.secret_ref))?;
     if secret.expose_secret().len() > policy.response.max_secret_bytes {
         anyhow::bail!("resolved credential exceeds the configured bound");
     }
@@ -1075,7 +1096,7 @@ where
     })
 }
 
-fn enforce_content_length(headers: &HeaderMap, limit: usize, kind: &str) -> Result<()> {
+pub(crate) fn enforce_content_length(headers: &HeaderMap, limit: usize, kind: &str) -> Result<()> {
     let Some(value) = headers.get(http::header::CONTENT_LENGTH) else {
         return Ok(());
     };
@@ -1259,7 +1280,7 @@ async fn tunneled_request(
     connect_host: &str,
     token: &str,
 ) -> Response {
-    match prepare_tunneled_request(request, connect_host, token) {
+    match prepare_tunneled_request(request, connect_host, Some(token)) {
         Ok(request) => {
             if let Ok(response) = forward_inner(state, request).await {
                 response
@@ -1272,10 +1293,10 @@ async fn tunneled_request(
     }
 }
 
-fn prepare_tunneled_request(
+pub(crate) fn prepare_tunneled_request(
     request: hyper::Request<hyper::body::Incoming>,
     connect_host: &str,
-    token: &str,
+    token: Option<&str>,
 ) -> std::result::Result<Request, Box<Response>> {
     if request
         .uri()
@@ -1287,11 +1308,37 @@ fn prepare_tunneled_request(
         ));
     }
     let uri_authority = request.uri().authority().cloned();
+    if request.headers().get_all(http::header::HOST).iter().count() > 1 {
+        return Err(Box::new(
+            (StatusCode::MISDIRECTED_REQUEST, "TLS authority mismatch").into_response(),
+        ));
+    }
     let host_authority = request
         .headers()
-        .get("host")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<http::uri::Authority>().ok());
+        .get(http::header::HOST)
+        .map(|value| {
+            value
+                .to_str()
+                .ok()
+                .and_then(|text| text.parse::<http::uri::Authority>().ok())
+                .ok_or_else(|| {
+                    Box::new(
+                        (StatusCode::MISDIRECTED_REQUEST, "TLS authority mismatch").into_response(),
+                    )
+                })
+        })
+        .transpose()?;
+    if uri_authority
+        .as_ref()
+        .is_some_and(|a| a.as_str().contains('@'))
+        || host_authority
+            .as_ref()
+            .is_some_and(|a| a.as_str().contains('@'))
+    {
+        return Err(Box::new(
+            (StatusCode::MISDIRECTED_REQUEST, "TLS authority mismatch").into_response(),
+        ));
+    }
     if let (Some(uri), Some(host)) = (&uri_authority, &host_authority)
         && !same_tls_authority(uri, host)
     {
@@ -1318,10 +1365,12 @@ fn prepare_tunneled_request(
     parts.uri = absolute.parse().map_err(|_| {
         Box::new((StatusCode::BAD_REQUEST, "request target is invalid").into_response())
     })?;
-    let identity = HeaderValue::from_str(&format!("Charon {token}")).map_err(|_| {
-        Box::new((StatusCode::UNAUTHORIZED, "workload identity is invalid").into_response())
-    })?;
-    parts.headers.insert(IDENTITY_HEADER, identity);
+    if let Some(token) = token {
+        let identity = HeaderValue::from_str(&format!("Charon {token}")).map_err(|_| {
+            Box::new((StatusCode::UNAUTHORIZED, "workload identity is invalid").into_response())
+        })?;
+        parts.headers.insert(IDENTITY_HEADER, identity);
+    }
     Ok(Request::from_parts(parts, Body::new(body)))
 }
 
@@ -1431,7 +1480,10 @@ fn absolute_target(uri: &Uri) -> Result<reqwest::Url> {
     Ok(target)
 }
 
-fn validate_request_authority(headers: &HeaderMap, target: &reqwest::Url) -> Result<()> {
+pub(crate) fn validate_request_authority(headers: &HeaderMap, target: &reqwest::Url) -> Result<()> {
+    if headers.get_all(http::header::HOST).iter().count() > 1 {
+        anyhow::bail!("multiple Host headers are forbidden");
+    }
     let Some(value) = headers.get(http::header::HOST) else {
         return Ok(());
     };
@@ -1440,6 +1492,9 @@ fn validate_request_authority(headers: &HeaderMap, target: &reqwest::Url) -> Res
         .context("Host header is invalid")?
         .parse()
         .context("Host header authority is invalid")?;
+    if authority.as_str().contains('@') {
+        anyhow::bail!("Host user information is forbidden");
+    }
     let target_host = target.host_str().context("target hostname is missing")?;
     let target_port = target.port_or_known_default();
     let authority_port = authority
@@ -1452,7 +1507,7 @@ fn validate_request_authority(headers: &HeaderMap, target: &reqwest::Url) -> Res
     Ok(())
 }
 
-fn filtered_headers(headers: &HeaderMap) -> Result<Vec<(HeaderName, HeaderValue)>> {
+pub(crate) fn filtered_headers(headers: &HeaderMap) -> Result<Vec<(HeaderName, HeaderValue)>> {
     let mut blocked = HOP_BY_HOP_HEADERS
         .iter()
         .map(|name| HeaderName::from_static(name))

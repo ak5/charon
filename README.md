@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/ak5/charon/actions/workflows/ci.yml"><img src="https://github.com/ak5/charon/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/ak5/charon/pkgs/container/charon"><img src="https://img.shields.io/badge/container-ghcr.io%2Fak5%2Fcharon-blue" alt="Container image"></a>
-  <a href="https://github.com/ak5/charon/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.97%2B-orange" alt="Rust 1.97 or newer"></a>
+  <a href="https://github.com/ak5/charon/blob/main/Cargo.toml"><img src="https://img.shields.io/badge/rust-1.99%2B-orange" alt="Rust 1.99 or newer"></a>
   <a href="https://github.com/ak5/charon/blob/main/LICENSE"><img src="https://img.shields.io/github/license/ak5/charon" alt="MIT license"></a>
 </p>
 
@@ -16,7 +16,8 @@
 </p>
 
 Charon is a transparent gateway and forward proxy that adds credentials to
-approved outbound requests.
+approved outbound requests. It also forwards secretless and caller-authenticated
+traffic through an exclusive workload gateway for ordinary proxy clients.
 It lets a workload call an API without putting the API credential in that
 workload's environment, filesystem, or container image.
 
@@ -25,9 +26,9 @@ narrowly scoped access to an authenticated API without placing the long-lived
 credential inside the agent runtime. The same model works for CLIs, builds,
 development containers, and other programs.
 
-The workload sends an opaque capability reference instead of a real credential. Charon
+For credential mediation, the workload sends an opaque capability reference instead of a real credential. Charon
 checks authorization, matches the request against local policy, obtains the
-credential from the configured secret store, and hydrates the reference only in
+credential from its unlocked KeePass database, and hydrates the reference only in
 the request sent upstream.
 
 ```text
@@ -37,7 +38,7 @@ capability reference        resolve credential + sanitize response
 ```
 
 Charon is an early-stage project. Its explicit proxy, transparent TLS gateway,
-authorization, structured hydration, response mediation, provider adapters,
+authorization, structured hydration, response mediation, KeePass credential storage,
 metadata-only receipts, and isolated tests are implemented.
 
 ## Why use it?
@@ -51,13 +52,13 @@ anything that compromises it.
 Charon moves the credential into a smaller, separately operated process. A
 request is allowed only when all of these agree:
 
-- a signed, short-lived, single-use workload manifest in explicit-proxy mode,
-  or an Infra-isolated listener bound to one workload in transparent mode;
+- a signed, short-lived, single-use manifest in signed proxy mode, or an
+  Infra-isolated listener bound to one workload in transparent/exclusive mode;
 - a named capability in Charon's configuration; and
 - the actual destination hostname, HTTP method, and path.
 
 The workload cannot choose a secret, a secret-store item, or an unconfigured
-destination. Charon does not return credentials to workloads and does not
+destination. Charon does not return brokered credentials to workloads and does not
 follow redirects after adding one.
 
 Applications keep using their ordinary credential settings. The configured
@@ -81,17 +82,17 @@ These names appear in the configuration and protocol:
 | **Workload** | The program making the outbound request, such as an AI agent, CLI, build, or development container. |
 | **Manifest** | A short-lived, signed authorization used by explicit-proxy clients. It identifies the workload and names one capability. Each manifest can be used once. |
 | **Capability** | A named permission in Charon's local policy, for example “read the current GitHub user.” It maps to one service and an exact set of methods and paths. |
-| **Capability reference** | Public syntax such as `{{charon.github.read}}`. It names local policy, never a provider item or secret. |
-| **Service** | An exact destination, typed hydration rule, provider reference, response mode, and resource limits. |
-| **Secret provider** | The adapter Charon uses to obtain a credential. The current implementations are an environment provider for disposable development and a Vaultwarden provider. |
-| **Realm** | One isolated Charon deployment: a process, configuration, secret-provider session, and policy. |
+| **Capability reference** | Public syntax such as `{{charon.github.read}}`. It names local policy, never a database entry or secret. |
+| **Service** | An exact destination, typed hydration rule, KeePass reference, response mode, and resource limits. |
+| **KeePass store** | A read-only KDBX database unlocked by its owner through the HTTPS admin page. Only exact mapped Password fields resolve. |
+| **Realm** | One isolated Charon deployment: a process, configuration, KeePass database and unlocked memory, and policy. |
 
 The current pre-1.0 manifest also carries tenant, persona, workspace, and lease
 identifiers supplied by the issuer. They are integration context, not secret
 selectors or core Charon concepts. This part of the public contract is under
 review before 1.0.
 
-## How a request works
+## How a signed credential request works
 
 1. A trusted issuer gives the workload a signed manifest for a named
    capability.
@@ -103,7 +104,8 @@ review before 1.0.
 3. Charon verifies the signature, expiry, realm identity, and single-use nonce.
 4. Charon resolves the capability from its own configuration and checks the
    request's exact host, method, and path.
-5. Charon asks its configured provider for the policy-owned secret reference.
+5. When configured, Charon requests a Telegram allow-once decision. It then
+   resolves the policy-owned reference from its unlocked KeePass snapshot.
 6. Charon hydrates only the declared sink at the outbound boundary, mediates
    the response using its explicit streaming mode, and writes a metadata-only
    receipt.
@@ -118,7 +120,7 @@ the Infra routing boundary. Charon's ordinary health endpoints are described by
 
 ## Development
 
-The project requires Rust 1.97 or newer. [mise](https://mise.jdx.dev/) is
+The project requires Rust 1.99 or newer. [mise](https://mise.jdx.dev/) is
 optional; it installs the pinned toolchain and provides short names for common
 development commands.
 
@@ -140,10 +142,11 @@ That command is equivalent to:
 cargo run -- --config examples/charon.dev.toml
 ```
 
-The development configuration listens only on `127.0.0.1:3129`, uses the
-environment provider, and contains no real credential. It is suitable for
-starting the process and inspecting its health endpoints; exercising an
-authenticated proxy request also requires issuing a valid test manifest.
+The development example contains synthetic paths and identifiers. Provision
+its KeePass file, private admin-state directory, and HTTPS certificate before
+starting it. Its workload proxy listens on `127.0.0.1:3129`; the separate admin
+listener uses the configured HTTPS origin. The store starts locked. Tests create
+disposable synthetic KDBX files without requiring operator setup.
 
 Run the individual checks directly if you do not use mise:
 
@@ -158,7 +161,7 @@ cargo deny check
 
 [`examples/charon.dev.toml`](examples/charon.dev.toml) is a minimal local
 configuration. [`examples/charon.toml`](examples/charon.toml) shows the
-Vaultwarden, TLS, identity, capability, and service settings used in an
+KeePass, HTTPS admin, TLS, identity, capability, and service settings used in an
 operator-managed explicit proxy. [`examples/transparent-gateway.toml`](examples/transparent-gateway.toml)
 shows a synthetic policy-bound transparent listener.
 
@@ -173,29 +176,54 @@ Configuration is deny-by-default:
   are explicit policy;
 - unknown configuration fields are rejected.
 
-### Secret-store adapters
+### KeePass and owner enrollment
 
-Secret stores sit behind the Rust `SecretProvider` interface. An adapter
-receives an opaque reference chosen by local policy and returns a
-`SecretString`; callers never choose a backend item.
+Charon uses one concrete, read-only KeePass KDBX store. `[keepass]` names the
+private database and optional private key file. Each `[[keepass.items]]` maps a
+local `secret_ref` and realm persona to an exact canonical entry UUID. Charon
+reads only that entry's protected Password field; workloads cannot select entries.
 
-The binary currently includes:
+The process boots locked. On first startup it prints a random enrollment code
+to the operator console, valid for five minutes. Retrieve it over SSH and open
+the configured HTTPS admin origin on your own device. Enter the code and create
+a passkey. Charon persists public registration data, never the passkey private
+key. Sign in with that passkey, enter the KeePass master password, and unlock.
+The master password is discarded after decryption; mapped values remain in
+secret-holding memory until explicit lock or process restart. Enroll a second
+passkey while signed in for recovery. There is no default admin password.
 
-- `environment`, intended only for disposable local development; and
-- `vaultwarden`, using an isolated Bitwarden CLI session and exact item UUID
-  mappings.
+The admin listener needs a stable DNS origin, browser-trusted certificate, and
+its own TLS key. It is separate from workload listeners and the interception CA.
+Keep public passkey state in a private writable directory. See
+[owner operations](docs/admin.md) for configuration and recovery.
 
-More backends can be added without changing the workload protocol. Providers
-are compiled into the binary and selected by trusted realm configuration;
-Charon does not load credential-handling plugins dynamically or fall back to a
-different provider during an outage. The extension rules are documented in
-[ADR 0004](docs/adr/0004-secret-provider-adapters.md).
+`[admin]` is required by the binary in either serving mode.
+`mise run browser-admin-check` separately verifies the UI with Chrome and Node 22+.
+The main quality gate does not run that browser-dependent test.
+
+### Telegram decisions
+
+See [BotFather setup](docs/telegram-setup.md) and the
+[two-password E2E fixture](tests/e2e/README.md).
+
+Optional `[admin.telegram]` settings select one positive private user/chat ID
+and exact capability or route names requiring approval. Store the bot token in
+an operator-only protected KeePass Password field and set
+`keepass.telegram_bot_token_entry_id` to its exact UUID, outside workload mappings.
+Start a private chat with the bot before using it. After HTTPS owner unlock,
+Charon sends an unlocked notification and allow-once/deny buttons for selected
+requests. Lock cancels pending approvals and stops the channel; restart requires
+another owner unlock. No bot token or master password is read from environment
+variables or password files. Each decision expires after at most two minutes;
+gateway deadlines may shorten it. Unavailable delivery, timeout, denial, and
+cancellation fail closed. Telegram never receives the vault password, enrollment
+code, or workload credential values.
 
 ## Project boundaries
 
 Charon owns the request-time data path: identity or isolated-listener binding,
 local policy, credential lookup, typed hydration, response mediation, proxying,
-and metadata-only receipts.
+metadata-only receipts, owner enrollment, and optional local Telegram decisions.
 
 It does not own:
 
@@ -203,7 +231,7 @@ It does not own:
 - issuance of workload manifests;
 - secret-store provisioning and backup;
 - deployment or network policy; or
-- human-approval workflows.
+- external control-plane approval rules and manifest issuance.
 
 Those systems integrate through signed data and versioned contracts; Charon
 does not query an application's database on the request path. See the
@@ -212,8 +240,8 @@ does not query an application's database on the request path. See the
 
 ## Security
 
-Charon handles credentials, so changes to authorization, proxying, provider
-adapters, TLS, or logging deserve careful review. Please read
+Charon handles credentials, so changes to authorization, proxying, KeePass
+storage, admin authentication, Telegram decisions, TLS, or logging deserve careful review. Please read
 [`SECURITY.md`](SECURITY.md) before reporting a vulnerability and see the
 [threat model](docs/threat-model.md) for the detailed guarantees, assumptions,
 and remaining risks.
@@ -223,6 +251,11 @@ The full local quality gate is:
 ```sh
 mise run check
 ```
+
+## Other projects like Charon
+
+- [Infisical Agent Vault](docs/comparisons/infisical-agent-vault.md): when to use
+  its credential-management workflows and when to use Charon with KeePass.
 
 ## Documentation
 
@@ -240,3 +273,12 @@ mise run check
 ## License
 
 Charon is licensed under the [MIT License](LICENSE).
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](contracts/workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.

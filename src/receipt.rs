@@ -18,7 +18,7 @@ use sha2::{Digest as _, Sha256};
 use tokio::sync::mpsc;
 use zeroize::Zeroize;
 
-use crate::{config::ReceiptConfig, provider::ensure_private_file};
+use crate::{config::ReceiptConfig, keepass::ensure_private_file};
 
 const MAX_RECEIPT_LINE_BYTES: usize = 64 * 1024;
 
@@ -81,6 +81,21 @@ pub struct ReceiptJournal {
 /// Capacity reserved before any credential resolution or upstream request.
 pub struct ReceiptPermit {
     permit: Option<mpsc::OwnedPermit<DataPlaneReceipt>>,
+}
+
+impl ReceiptPermit {
+    /// Finalize a reserved metadata receipt for a request denied before streaming.
+    pub fn record(mut self, receipt: DataPlaneReceipt) {
+        if let Some(permit) = self.permit.take() {
+            let sender = permit.send(receipt);
+            if sender.is_closed() {
+                tracing::error!(
+                    outcome = "receipt_lost",
+                    "receipt writer closed during finalization"
+                );
+            }
+        }
+    }
 }
 
 impl ReceiptJournal {

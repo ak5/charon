@@ -13,6 +13,38 @@ allow = [
   "Zlib",
 ]
 
+# Reviewed WebAuthn implementation, used unchanged; see THIRD_PARTY_NOTICES.md.
+[[licenses.exceptions]]
+name = "base64urlsafedata"
+version = "=0.5.5"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "webauthn-attestation-ca"
+version = "=0.5.5"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "webauthn-rs"
+version = "=0.5.5"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "webauthn-rs-core"
+version = "=0.5.5"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "webauthn-rs-proto"
+version = "=0.5.5"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+name = "webauthn-authenticator-rs"
+version = "=0.5.5"
+allow = ["MPL-2.0"]
+
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"

@@ -2,7 +2,7 @@
 name = "charon"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97"
+rust-version = "1.99"
 description = "Credential-injecting forward proxy for AI agents and other workloads"
 license = "MIT"
 repository = "https://github.com/ak5/charon"
@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
 chacha20poly1305 = "0.10"
@@ -24,7 +23,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
 rusqlite = { version = "0.38", features = ["bundled"] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -37,10 +36,18 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 zeroize = "1.8"
+keepass = { version = "0.15.2", default-features = false }
+webauthn-rs = "0.5.5"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+keepass = { version = "0.15.2", default-features = false, features = ["save_kdbx4"] }
 http-body-util = "0.1"
 tempfile = "3.23"
+x509-parser = "0.18"
+webauthn-authenticator-rs = { version = "0.5.5", default-features = false, features = ["softpasskey"] }
+tower = { version = "0.5", features = ["util"] }
 
 
 [lints.rust]
