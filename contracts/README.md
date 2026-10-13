@@ -45,7 +45,9 @@ transport authentication, idempotency, ownership-marker checks, filesystem
 permissions, and network policy remain operator responsibilities documented in
 [`docs/persona-realm-contract.md`](../docs/persona-realm-contract.md).
 
-Approval contracts are implemented outside Charon. Their trust boundaries,
+The external broker approval contracts are implemented outside the data plane.
+Charon's local allow-once Telegram gate is documented in
+[owner operations](../docs/admin.md) and does not implement reusable broker rules. Their trust boundaries,
 grant semantics, non-reusable operations, outage behavior, and rejected
 alternatives are recorded in
 [`ADR 0005`](../docs/adr/0005-human-approval-broker.md).
@@ -54,3 +56,14 @@ the [`approval broker operator runbook`](../docs/approval-broker-operations.md).
 
 Tool admission and receipt contracts are also implemented outside Charon.
 Their first adapter is [`charon-hermes`](../integrations/hermes/README.md).
+
+## Exclusive Hermes network gateway
+
+The [exclusive workload gateway](workload-gateway.md) provides a separate
+`--gateway-config` mode for ordinary HTTP(S) proxy clients, including reusable
+CONNECT tunnels. It binds one fixed isolated workload, supports secretless
+forwarding and typed credential sinks, and requires its own validated schema.
+Signed proxy authentication, transparent service lanes, and Hermes tool
+admission remain independent controls. Infra owns isolation, trust and cutover.
+
+- [Owner administration](admin.md): independent HTTPS enrollment, passkey sign-in, and vault unlock/lock.

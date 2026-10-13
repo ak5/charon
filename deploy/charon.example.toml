@@ -10,10 +10,26 @@ generation = 1
 [upstream_proxy]
 url = "http://egress.example.internal:8888"
 
-# Milestone-0 only. The durable deployment switches to the Vaultwarden provider
-# after its provider identity and item mapping have been provisioned.
-[provider]
-kind = "environment"
+[keepass]
+# Optional operator-only protected Password entry; never include in items.
+# telegram_bot_token_entry_id = "00000000-0000-4000-8000-000000000003"
+database = "/var/lib/charon/vault.kdbx"
+
+[[keepass.items]]
+secret_ref = "CHARON_TEST_CREDENTIAL"
+persona = "milestone-0-test"
+entry_id = "00000000-0000-4000-8000-000000000001"
+
+[admin]
+listen = "0.0.0.0:8444"
+origin = "https://charon.example.test:8444"
+certificate = "/etc/charon/admin/fullchain.pem"
+private_key = "/run/credentials/charon-admin-key.pem"
+passkeys_file = "/var/lib/charon/admin/passkeys.json"
+
+# [admin.telegram]
+# user_id = 123456789
+# approval_capabilities = ["github-read-user"]
 
 [identity]
 issuer = "example-control-plane"

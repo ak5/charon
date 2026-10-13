@@ -9,7 +9,7 @@ trap cleanup EXIT HUP INT TERM
 deploy_dir="$test_root/deploy"
 mock_bin="$test_root/bin"
 mkdir -p "$deploy_dir" "$mock_bin"
-printf '%s\n' 'CHARON_BIND_IP=127.0.0.1' 'CHARON_TEST_CREDENTIAL=disposable' >"$deploy_dir/runtime.env"
+printf '%s\n' 'CHARON_BIND_IP=127.0.0.1' 'CHARON_ADMIN_BIND_IP=127.0.0.1' >"$deploy_dir/runtime.env"
 printf '%s\n' 'services: {}' >"$deploy_dir/compose.yaml.next"
 printf '%s\n' '[server]' >"$deploy_dir/charon.toml.next"
 
@@ -50,6 +50,16 @@ EOF
 
 cat >"$mock_bin/curl" <<'EOF'
 #!/bin/sh
+set -eu
+found=false
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --request-target ]; then
+    [ "$2" = https://api.github.com/user ]
+    found=true
+  fi
+  shift
+done
+[ "$found" = true ]
 printf 401
 EOF
 chmod +x "$mock_bin/docker" "$mock_bin/curl"

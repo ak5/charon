@@ -69,13 +69,15 @@ impl Resolve for PinnedResolver {
                 ))
                     as Box<dyn std::error::Error + Send + Sync>);
             }
-            cache
+            let addresses = cache
                 .lock()
                 .map_err(|_| {
                     Box::new(io::Error::other("DNS pin cache is unavailable"))
                         as Box<dyn std::error::Error + Send + Sync>
                 })?
-                .insert(hostname, addresses.clone());
+                .entry(hostname)
+                .or_insert(addresses)
+                .clone();
             Ok(Box::new(addresses.into_iter()) as Addrs)
         })
     }
@@ -88,6 +90,35 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
         || ip.is_broadcast()
         || ip.is_documentation()
         || ip.is_unspecified()
+        || (ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]))
+        || (ip.octets()[0] == 198 && matches!(ip.octets()[1], 18 | 19))
+        || (ip.octets()[0] == 192 && ip.octets()[1] == 0 && ip.octets()[2] == 0)
         || ip.octets()[0] == 0
         || ip.octets()[0] >= 224)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_ipv4;
+    #[test]
+    fn denies_nonpublic_and_metadata_ranges() {
+        for ip in [
+            [0, 0, 0, 1],
+            [10, 0, 0, 1],
+            [127, 0, 0, 1],
+            [169, 254, 169, 254],
+            [172, 16, 0, 1],
+            [192, 168, 0, 1],
+            [100, 64, 0, 1],
+            [100, 100, 100, 200],
+            [198, 18, 0, 1],
+            [192, 0, 0, 8],
+            [224, 0, 0, 1],
+            [240, 0, 0, 1],
+            [255, 255, 255, 255],
+        ] {
+            assert!(!is_public_ipv4(ip.into()));
+        }
+        assert!(is_public_ipv4([8, 8, 8, 8].into()));
+    }
 }

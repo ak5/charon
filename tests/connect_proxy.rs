@@ -2,6 +2,8 @@
 
 #![cfg(unix)]
 
+mod common;
+
 use std::{
     collections::HashMap,
     os::unix::fs::PermissionsExt as _,
@@ -10,15 +12,13 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use charon::{
     config::{
-        CapabilityPolicy, Config, IdentityConfig, ProviderConfig, RealmConfig, ReceiptConfig,
-        ServicePolicy, TlsConfig,
+        CapabilityPolicy, Config, IdentityConfig, RealmConfig, ReceiptConfig, ServicePolicy,
+        TlsConfig,
     },
     identity::WorkloadClaims,
-    provider::{ProviderError, ProviderResult, SecretProvider, SecretRef},
     proxy::{AppState, app, serve_transparent},
 };
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -30,27 +30,12 @@ use rcgen::{
     KeyUsagePurpose,
 };
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
-use secrecy::SecretString;
 use tempfile::TempDir;
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::{TlsConnector, client::TlsStream};
-
-#[derive(Debug)]
-struct StaticProvider(HashMap<String, String>);
-
-#[async_trait]
-impl SecretProvider for StaticProvider {
-    async fn resolve(&self, secret_ref: &SecretRef<'_>) -> ProviderResult<SecretString> {
-        self.0
-            .get(secret_ref.as_str())
-            .cloned()
-            .map(SecretString::from)
-            .ok_or(ProviderError::SecretUnavailable)
-    }
-}
 
 fn signing_key() -> SigningKey {
     SigningKey::from_bytes(&[21_u8; 32])
@@ -194,7 +179,8 @@ async fn proxy(tls: TlsConfig) -> Result<std::net::SocketAddr> {
         realm: realm(),
         listen: address,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: Some(tls),
         identity: IdentityConfig {
             issuer: "connect-test".into(),
@@ -224,10 +210,10 @@ async fn proxy(tls: TlsConfig) -> Result<std::net::SocketAddr> {
             transparent_listen: None,
         }],
     };
-    let provider = StaticProvider(HashMap::from([(
+    let provider = common::store(HashMap::from([(
         "CHARON_ALLOWED_TOKEN".into(),
         "fixture-secret".into(),
-    )]));
+    )]))?;
     let state = Arc::new(AppState::new(config, Arc::new(provider))?);
     tokio::spawn(async move { axum::serve(listener, app(state)).await });
     Ok(address)
@@ -242,7 +228,8 @@ async fn transparent_listener_derives_capability_and_denies_unknown_before_egres
         realm: realm(),
         listen: "127.0.0.1:0".parse()?,
         upstream_proxy: None,
-        provider: ProviderConfig::Environment,
+        keepass: common::config("developer"),
+        admin: None,
         tls: Some(tls),
         identity: IdentityConfig {
             issuer: "connect-test".into(),
@@ -278,10 +265,10 @@ async fn transparent_listener_derives_capability_and_denies_unknown_before_egres
     };
     let state = Arc::new(AppState::new(
         config,
-        Arc::new(StaticProvider(HashMap::from([(
+        Arc::new(common::store(HashMap::from([(
             "CHARON_ALLOWED_TOKEN".into(),
             "fixture-secret".into(),
-        )]))),
+        )]))?),
     )?);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let task = tokio::spawn(serve_transparent(

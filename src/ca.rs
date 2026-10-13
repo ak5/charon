@@ -5,8 +5,10 @@ use std::{fs::OpenOptions, io::Write as _, path::Path};
 use anyhow::{Context, Result, bail};
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType, IsCa, KeyPair,
+    KeyUsagePurpose,
 };
 use rustls::pki_types::{CertificateDer, pem::PemObject as _};
+use secrecy::{ExposeSecret as _, SecretString};
 use sha2::{Digest as _, Sha256};
 
 use crate::{config::TlsConfig, tls::TlsAuthority};
@@ -21,14 +23,16 @@ pub fn generate(name: &str, certificate: &Path, private_key: &Path) -> Result<()
         bail!("CA name is invalid");
     }
     let key = KeyPair::generate().context("failed to generate CA key")?;
-    let key_pem = key.serialize_pem();
+    let key_pem = SecretString::from(key.serialize_pem());
     let mut params = CertificateParams::new(Vec::<String>::new())?;
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    params.use_authority_key_identifier_extension = true;
     let mut distinguished_name = DistinguishedName::new();
     distinguished_name.push(DnType::CommonName, name);
     params.distinguished_name = distinguished_name;
     let issuer = CertifiedIssuer::self_signed(params, key).context("failed to sign CA")?;
-    write_new(private_key, key_pem.as_bytes(), true)?;
+    write_new(private_key, key_pem.expose_secret().as_bytes(), true)?;
     if let Err(error) = write_new(certificate, issuer.pem().as_bytes(), false) {
         let _ = std::fs::remove_file(private_key);
         return Err(error);
