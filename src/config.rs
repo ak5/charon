@@ -26,8 +26,10 @@ pub struct Config {
     pub listen: SocketAddr,
     /// Optional upstream proxy and protected authentication input.
     pub upstream_proxy: Option<UpstreamProxyConfig>,
-    /// Credential-provider implementation and its narrowly scoped inputs.
-    pub provider: ProviderConfig,
+    /// Read-only `KeePass` store, unlocked interactively after boot.
+    pub keepass: KeePassConfig,
+    /// Separate HTTPS administration and interactive unlock configuration.
+    pub admin: Option<crate::admin::AdminConfig>,
     /// Optional Charon-owned interception CA used only for HTTPS CONNECT.
     pub tls: Option<TlsConfig>,
     /// Signed workload-manifest verification policy.
@@ -88,42 +90,63 @@ pub struct TlsConfig {
     pub ca_private_key: std::path::PathBuf,
 }
 
-/// Credential-provider selection.
-#[derive(Clone, Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
-pub enum ProviderConfig {
-    /// Prototype environment provider for disposable development credentials.
-    Environment,
-    /// Vaultwarden access through the official Bitwarden CLI compatibility API.
-    Vaultwarden(VaultwardenConfig),
-}
-
-/// Locked-by-default Vaultwarden provider configuration.
+/// Read-only `KeePass` database and policy-owned entry mappings.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct VaultwardenConfig {
-    /// Absolute path to the pinned `bw` CLI executable.
-    pub cli_path: std::path::PathBuf,
-    /// Dedicated directory containing only the encrypted CLI vault state.
-    pub appdata_dir: std::path::PathBuf,
-    /// Root-readable file containing a short-lived unlock session.
-    pub session_file: std::path::PathBuf,
-    /// Maximum in-memory lifetime of resolved values.
-    pub cache_ttl_seconds: u64,
-    /// Explicit opaque-reference to vault-item mapping.
-    pub items: Vec<VaultItemMapping>,
+pub struct KeePassConfig {
+    /// Absolute path to the encrypted KDBX database.
+    pub database: PathBuf,
+    /// Optional protected key file, required alongside the interactive password.
+    pub key_file: Option<PathBuf>,
+    /// Optional operator-only protected Password entry for the Telegram bot token.
+    pub telegram_bot_token_entry_id: Option<String>,
+    /// Exact policy reference to password-entry mappings.
+    pub items: Vec<KeePassItemMapping>,
 }
 
-/// One exact Charon reference mapped to one exact Vaultwarden item UUID.
+/// One exact policy reference mapped to a `KeePass` entry UUID.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct VaultItemMapping {
-    /// Opaque reference used by service policy.
+pub struct KeePassItemMapping {
+    /// Reference chosen only by local service policy.
     pub secret_ref: String,
-    /// Exact persona allowed to use the mapped item.
+    /// Persona owning this mapped entry.
     pub persona: String,
-    /// Exact Vaultwarden item UUID read with `bw get password`.
-    pub item_id: String,
+    /// Canonical UUID of the entry whose Password field is used.
+    pub entry_id: String,
+}
+
+impl KeePassConfig {
+    /// Validate paths and exact mappings before a listener is opened.
+    ///
+    /// # Errors
+    /// Rejects relative paths, duplicate references/entries, and wrong personas.
+    pub fn validate(&self, persona: &str) -> Result<()> {
+        if !self.database.is_absolute() || self.key_file.as_ref().is_some_and(|p| !p.is_absolute())
+        {
+            bail!("KeePass paths must be absolute");
+        }
+        let mut refs = HashSet::new();
+        let mut ids = HashSet::new();
+        for item in &self.items {
+            if item.secret_ref.is_empty()
+                || item.secret_ref.len() > 256
+                || item.persona != persona
+                || !is_uuid(&item.entry_id)
+                || uuid::Uuid::parse_str(&item.entry_id)?.to_string() != item.entry_id
+                || !refs.insert(&item.secret_ref)
+                || !ids.insert(&item.entry_id)
+            {
+                bail!("invalid KeePass entry mapping");
+            }
+        }
+        if let Some(id) = &self.telegram_bot_token_entry_id
+            && (!is_uuid(id) || uuid::Uuid::parse_str(id)?.to_string() != *id || ids.contains(id))
+        {
+            bail!("invalid or workload-accessible Telegram token entry");
+        }
+        Ok(())
+    }
 }
 
 /// Verification parameters for short-lived workload manifests.
@@ -168,8 +191,7 @@ pub struct ServicePolicy {
     pub hosts: Vec<String>,
     /// Typed, policy-owned credential hydration rule.
     pub hydration: HydrationPolicy,
-    /// Credential provider key. The prototype environment provider treats this
-    /// as an environment-variable name in the Charon process only.
+    /// Policy-owned reference mapped to one exact configured `KeePass` entry.
     pub secret_ref: String,
     /// Explicit response mediation and resource limits.
     pub response: ResponsePolicy,
@@ -352,7 +374,22 @@ impl Config {
         if self.capabilities.is_empty() {
             bail!("at least one capability policy is required");
         }
-        let vault_refs = self.validate_provider()?;
+        if let Some(admin) = &self.admin {
+            admin.validate()?;
+            if let Some(telegram) = &admin.telegram {
+                telegram.validate_inventory(self.capabilities.iter().map(|c| c.name.as_str()))?;
+            }
+            if admin.listen == self.listen {
+                bail!("admin and proxy listeners must differ");
+            }
+        }
+        self.keepass.validate(&self.realm.persona)?;
+        let vault_refs = self
+            .keepass
+            .items
+            .iter()
+            .map(|i| i.secret_ref.as_str())
+            .collect::<HashSet<_>>();
 
         let mut names = HashSet::new();
         let mut hosts = HashSet::new();
@@ -399,19 +436,9 @@ impl Config {
                     service.name
                 );
             }
-            if matches!(&self.provider, ProviderConfig::Environment)
-                && !is_environment_reference(&service.secret_ref)
-            {
+            if !vault_refs.contains(service.secret_ref.as_str()) {
                 bail!(
-                    "service {} environment reference must use the CHARON_ namespace",
-                    service.name
-                );
-            }
-            if let Some(refs) = &vault_refs
-                && !refs.contains(service.secret_ref.as_str())
-            {
-                bail!(
-                    "service {} references an unmapped Vaultwarden item",
+                    "service {} references an unmapped KeePass entry",
                     service.name
                 );
             }
@@ -530,24 +557,6 @@ impl Config {
                     capability.name
                 );
             }
-            if let ProviderConfig::Vaultwarden(provider) = &self.provider {
-                let service = self
-                    .services
-                    .iter()
-                    .find(|service| service.name == capability.service)
-                    .context("validated capability service disappeared")?;
-                let mapping = provider
-                    .items
-                    .iter()
-                    .find(|mapping| mapping.secret_ref == service.secret_ref)
-                    .context("validated Vaultwarden mapping disappeared")?;
-                if mapping.persona != capability.persona {
-                    bail!(
-                        "capability {} persona does not own its Vaultwarden item",
-                        capability.name
-                    );
-                }
-            }
             if capability.methods.is_empty() || capability.paths.is_empty() {
                 bail!(
                     "capability {} must declare methods and paths",
@@ -572,38 +581,6 @@ impl Config {
             }
         }
         Ok(())
-    }
-
-    fn validate_provider(&self) -> Result<Option<HashSet<&str>>> {
-        let ProviderConfig::Vaultwarden(provider) = &self.provider else {
-            return Ok(None);
-        };
-        if !provider.cli_path.is_absolute()
-            || !provider.appdata_dir.is_absolute()
-            || !provider.session_file.is_absolute()
-        {
-            bail!("Vaultwarden CLI, appdata, and session-file paths must be absolute");
-        }
-        if provider.cache_ttl_seconds == 0 || provider.cache_ttl_seconds > 300 {
-            bail!("Vaultwarden cache TTL must be between 1 and 300 seconds");
-        }
-        if provider.items.is_empty() {
-            bail!("Vaultwarden provider requires explicit item mappings");
-        }
-        let mut refs = HashSet::new();
-        let mut ids = HashSet::new();
-        for item in &provider.items {
-            if item.secret_ref.is_empty() || item.persona.is_empty() || !is_uuid(&item.item_id) {
-                bail!("Vaultwarden item mapping is invalid");
-            }
-            if !refs.insert(item.secret_ref.as_str()) || !ids.insert(item.item_id.as_str()) {
-                bail!("Vaultwarden item mappings must be unique");
-            }
-            if item.persona != self.realm.persona {
-                bail!("Vaultwarden item belongs to another persona realm");
-            }
-        }
-        Ok(Some(refs))
     }
 
     /// Resolve an exact destination host to one policy.
@@ -708,16 +685,6 @@ fn is_identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-fn is_environment_reference(value: &str) -> bool {
-    value.strip_prefix("CHARON_").is_some_and(|suffix| {
-        !suffix.is_empty()
-            && suffix.len() <= 120
-            && suffix
-                .bytes()
-                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
-    })
-}
-
 pub(crate) fn is_exact_host(value: &str) -> bool {
     if value.is_empty()
         || value.len() > 253
@@ -748,8 +715,8 @@ mod tests {
     use ed25519_dalek::SigningKey;
 
     use super::{
-        CapabilityPolicy, Config, HydrationPolicy, IdentityConfig, ProviderConfig, RealmConfig,
-        ResponsePolicy, ServicePolicy, UpstreamProxyConfig, VaultItemMapping, VaultwardenConfig,
+        CapabilityPolicy, Config, HydrationPolicy, IdentityConfig, RealmConfig, ResponsePolicy,
+        ServicePolicy, UpstreamProxyConfig,
     };
     use crate::broker::{CompressionPolicy, HydrationSink, ResponseMode};
 
@@ -765,7 +732,8 @@ mod tests {
                 .parse()
                 .unwrap_or_else(|error| panic!("{error}")),
             upstream_proxy: None,
-            provider: ProviderConfig::Environment,
+            keepass: crate::test_support::config("developer"),
+            admin: None,
             tls: None,
             identity: IdentityConfig {
                 issuer: "test-issuer".into(),
@@ -928,30 +896,13 @@ mod tests {
     }
 
     #[test]
-    fn vaultwarden_requires_exact_bounded_mappings() {
+    fn keepass_requires_exact_mappings() {
         let mut candidate = config();
-        candidate.services[0].secret_ref = "github/developer".into();
-        candidate.provider = ProviderConfig::Vaultwarden(VaultwardenConfig {
-            cli_path: "/usr/local/bin/bw".into(),
-            appdata_dir: "/var/lib/charon/bw".into(),
-            session_file: "/run/credentials/bw-session".into(),
-            cache_ttl_seconds: 30,
-            items: vec![VaultItemMapping {
-                secret_ref: "github/developer".into(),
-                persona: "developer".into(),
-                item_id: "00000000-0000-4000-8000-000000000001".into(),
-            }],
-        });
         assert!(candidate.validate().is_ok());
-
-        candidate.services[0].secret_ref = "github/another-persona".into();
+        candidate.services[0].secret_ref = "unmapped".into();
         assert!(candidate.validate().is_err());
-
-        candidate.services[0].secret_ref = "github/developer".into();
-        let ProviderConfig::Vaultwarden(provider) = &mut candidate.provider else {
-            panic!("test provider must be Vaultwarden");
-        };
-        provider.items[0].persona = "another-persona".into();
+        candidate = config();
+        candidate.keepass.items[0].persona = "another-persona".into();
         assert!(candidate.validate().is_err());
     }
 }

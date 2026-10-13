@@ -21,5 +21,5 @@
 - Risk:
 - Rollback:
 
-Ordinary pull requests target `dev`. Use the release template for `dev` to
-`main`.
+All pull requests target the protected default branch `main`. A successful merge
+is eligible for immutable image publication after CI passes.

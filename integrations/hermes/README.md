@@ -74,7 +74,7 @@ owner and name. Use the same immutable reference for both purposes:
    image into the downstream Hermes derivative and install that wheel into the
    same Python environment as Hermes. No Charon source needs to be vendored.
 
-The admission image uses a digest-pinned Python 3.12.10 slim base. It does not
+The admission image uses a digest-pinned Python 3.14.8 slim base. It does not
 contain Hermes, its credentials, or `/opt/data`; the wheel is compatible with
 Hermes's supported Python range.
 
@@ -109,7 +109,7 @@ agent:
 Run both containers as UID/GID `10000:10000`. Mount one dedicated socket volume
 at `/run/charon-hermes` in both containers. Mount the read-only policy and a
 private receipt-state volume only in the admission container. Do not share
-Docker's socket, Charon manifests, Vaultwarden state, provider references, or
+Docker's socket, Charon manifests, KeePass state, credential references, or
 credentials.
 
 ```text

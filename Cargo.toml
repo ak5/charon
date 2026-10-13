@@ -10,10 +10,9 @@ publish = false
 
 [dependencies]
 anyhow = "1.0"
-async-trait = "0.1"
 axum = "0.8"
 base64 = "0.23"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = { version = "0.11", features = ["zeroize"] }
 ed25519-dalek = "2.2"
 futures-util = "0.3"
 getrandom = "0.4"
@@ -23,12 +22,12 @@ hyper = { version = "1.8", features = ["client", "http1", "http2", "server"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 rcgen = { version = "0.14", features = ["pem", "x509-parser"] }
 reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
-rusqlite = { version = "0.38", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
 secrecy = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_jcs = "0.1"
+serde_jcs = "0.2"
 sha2 = "0.10"
 tokio = { version = "1.0", features = ["macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
@@ -37,11 +36,18 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2.5"
 zeroize = "1.8"
+keepass = { version = "0.15.2", default-features = false }
+webauthn-rs = "0.5.5"
+axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+uuid = { version = "1.28.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
+keepass = { version = "0.15.2", default-features = false, features = ["save_kdbx4"] }
 http-body-util = "0.1"
 tempfile = "3.23"
 x509-parser = "0.18"
+webauthn-authenticator-rs = { version = "0.5.5", default-features = false, features = ["softpasskey"] }
+tower = { version = "0.5", features = ["util"] }
 
 
 [lints.rust]

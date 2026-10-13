@@ -10,7 +10,7 @@ use rustls::{
 };
 use secrecy::{ExposeSecret as _, SecretString};
 
-use crate::{config::TlsConfig, provider::ensure_private_file};
+use crate::{config::TlsConfig, keepass::ensure_private_file};
 
 /// CA signer that intentionally has no `Debug`, serialization, or response
 /// conversion implementation.

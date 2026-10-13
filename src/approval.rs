@@ -584,7 +584,7 @@ fn encrypt(key: &[u8; KEY_BYTES], aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8
     getrandom::fill(&mut nonce).context("secure randomness unavailable")?;
     let ciphertext = cipher
         .encrypt(
-            Nonce::from_slice(&nonce),
+            &Nonce::from(nonce),
             Payload {
                 msg: plaintext,
                 aad,
@@ -603,9 +603,11 @@ fn decrypt(key: &[u8; KEY_BYTES], aad: &[u8], encrypted: &[u8]) -> Result<Vec<u8
         "stored encrypted request is invalid"
     );
     let (nonce, ciphertext) = encrypted.split_at(NONCE_BYTES);
+    let nonce = Nonce::try_from(nonce)
+        .map_err(|_| anyhow::anyhow!("stored encrypted request is invalid"))?;
     ChaCha20Poly1305::new(key.into())
         .decrypt(
-            Nonce::from_slice(nonce),
+            &nonce,
             Payload {
                 msg: ciphertext,
                 aad,

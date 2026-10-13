@@ -2,26 +2,26 @@ version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
-    target-branch: dev
+    target-branch: main
     schedule:
       interval: weekly
   - package-ecosystem: github-actions
     directory: /
-    target-branch: dev
+    target-branch: main
     schedule:
       interval: weekly
   - package-ecosystem: docker
     directory: /
-    target-branch: dev
+    target-branch: main
     schedule:
       interval: weekly
   - package-ecosystem: docker
     directory: /integrations/hermes
-    target-branch: dev
+    target-branch: main
     schedule:
       interval: weekly
   - package-ecosystem: pip
     directory: /integrations/hermes
-    target-branch: dev
+    target-branch: main
     schedule:
       interval: weekly

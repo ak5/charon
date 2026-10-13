@@ -1,4 +1,8 @@
-# Non-production deployment
+# Deployment
+
+All changes, including dependency updates, merge through checked pull requests
+to the protected default branch `main`. Each successful merged revision can be
+published; deploying its immutable image remains an operator decision.
 
 On a successful `CI` run for a push to `main`,
 `.github/workflows/release.yml` checks out that exact commit and publishes
@@ -15,12 +19,20 @@ The public workflows stop after publishing the image and do not access a
 deployment host. Operators can use the project-owned files under `deploy/`
 from their own trusted deployment system.
 
-The operator provisions `/opt/apps/charon/runtime.env` (mode `0600`) with only:
+The operator provisions `/opt/apps/charon/runtime.env` with nonsecret Compose
+listener settings only:
 
 ```dotenv
 CHARON_BIND_IP=<approved-internal-listener-ip>
-CHARON_TEST_CREDENTIAL=<disposable-value-with-no-production-access>
+CHARON_ADMIN_BIND_IP=<owner-admin-listener-ip>
 ```
+
+The deploy script adds the nonsecret image name and commit revision to `.env`.
+Neither file contains application secrets. Store the optional bot token in a
+dedicated protected KeePass Password entry, identified by
+`keepass.telegram_bot_token_entry_id` and excluded from workload mappings. Telegram
+starts only after owner unlock; no locked-boot notification is available. TLS
+private keys are provisioned as separate private files so HTTPS can start locked.
 
 The operator provisions a rootless Docker daemon for the deploy account,
 ownership of only `/opt/apps/charon`, and `curl`. If registry authentication is
@@ -33,11 +45,17 @@ socket shared by the secrets stack.
 ## Verification and failure behavior
 
 Compose waits for `/healthz`. The deploy script then checks that an unauthenticated
-proxy request is denied with `401` before credential resolution and that the running OCI revision label equals
+absolute-form HTTPS-target proxy request is denied with `401` before credential resolution and that the running OCI revision label equals
 the requested main commit. If pull, startup, health, denial, or revision checks
 fail, the script restores `.env.previous` and recreates the last known-good image.
 The Compose and policy files are staged and restored with the image, so a bad
 configuration change cannot make the rollback use the candidate contract.
+The smoke test uses curl's `--request-target https://api.github.com/user` over
+the plaintext proxy connection to reach manifest validation without CONNECT or
+a credential. Plaintext remote targets are rejected before identity validation
+and are not a valid identity smoke test. Deployment success does not imply
+unlocked readiness or Telegram delivery.
+
 The currently selected revision is observable with:
 
 ```sh
@@ -59,7 +77,7 @@ rebuild or retag it. The project-owned host command is:
 
 ## Removal
 
-This removes the milestone-0 instance but retains its small deployment files for
+This removes the Charon instance but retains its small deployment files for
 audit and later redeployment:
 
 ```sh
@@ -69,46 +87,38 @@ docker compose --env-file .env down
 
 After confirming the container and listener are gone, infra may remove the
 project directory, deploy account/key, private-network policy, and workload
-registry entry. No Vaultwarden state or production credential is part of this
-deployment.
+registry entry. Remove encrypted databases, optional key files and public passkey state only
+under the operator's retention and backup policy.
 
-## Vaultwarden provider cutover
+## KeePass and HTTPS admin setup
 
-The durable provider uses Vaultwarden through a pinned native Bitwarden CLI,
-which is compatible with the Vaultwarden client API. Infra, not a workload,
-owns these three mounts:
+Provision the encrypted KDBX, exact UUID mappings, optional private key file,
+browser-trusted admin certificate and independent TLS key. Create a mode-0700
+admin-state directory writable by Charon. The supplied Compose mounts the KDBX
+read-only and persists public passkey registrations separately from receipts.
+The image runs as UID/GID 65532 by default. Set host file/directory ownership
+for that identity (including the rootless daemon's UID mapping) or configure a
+reviewed dedicated `user`. Private files must be accessible only to Charon's UID. Set `admin.origin` to the
+stable HTTPS DNS origin your browser will actually use. The owner admin listener
+is separate from workload ports; firewall it away from the workload network.
+Publishing port 8444 only on an owner IP does not prevent access through a
+container's workload-network address when `admin.listen` is `0.0.0.0`. Infra must
+deny workload-to-admin traffic as well as restricting the host-published port.
+When Telegram is enabled, allow Charon direct HTTPS/DNS egress to
+`api.telegram.org`; the bot does not use the configured egress proxy.
 
-- `/usr/local/bin/bw` is a read-only, checksum-verified CLI executable;
-- `/var/lib/charon/bitwarden-cli` is a Charon-only directory containing the
-  encrypted CLI vault and server selection;
-- `/run/credentials/charon-vaultwarden-session` is a `0400`, memory-backed file
-  containing the current unlock session.
+First boot prints a five-minute console enrollment code. Retrieve it over SSH,
+open the HTTPS admin origin, create a passkey, sign in and unlock with the KeePass
+master password. Add a recovery passkey. Restart always requires another unlock;
+rollback to another image also starts locked. Do not route credential traffic
+until `/readyz` succeeds. Liveness can succeed while the vault is locked.
 
-The provider maps each opaque policy reference and exact persona to one exact
-vault item UUID. Startup rejects any capability whose persona does not own its
-service's mapping. It runs only `bw status`, `bw sync`, and
-`bw get password <uuid>`. The session is
-passed through the child environment, never an argument, response, or log. A
-missing, empty, whitespace-containing, or non-unlocked session fails as locked.
-Charon starts a fresh CLI process on a cache miss, zeroizes captured output, and
-caches resolved values in `SecretString` for at most 300 seconds (30 seconds in
-the example). A process restart starts with an empty value cache.
-
-Provision the encrypted CLI state interactively under the dedicated Charon host
-account, select the exact Vaultwarden server, log in with a least-privilege
-persona vault account, and sync once. Materialize the unlock session only into
-the memory-backed credential file immediately before starting Charon. Rotation
-is: update the mapped item, sync, atomically replace the session file if the
-vault was re-unlocked, wait one configured cache TTL or restart Charon, then
-revoke the prior value. Never place the API key, master password, session, CLI
-data, or resolved values in Compose environment, image layers, GitHub Actions,
-or the workload.
-
-Locked or missing sessions deny as `Vaultwarden provider is locked`; CLI/server
-failure denies as `Vaultwarden provider is unavailable`; revoked or deleted
-items deny as `Vaultwarden item is unavailable`. These messages are deliberately
-value-free. Removing the session file locks future cache misses; restart Charon
-when immediate invalidation of already-cached values is required.
+For rotation, update the encrypted database outside Charon, lock the store and
+unlock again to load its current mapped values, then revoke the prior credential.
+Changing policy mappings requires a validated configuration restart. Preserve
+public passkey state across image replacement; changing the origin requires
+new enrollment. Charon never writes a master-password file or modifies the KDBX.
+See [owner operations](admin.md) for certificates, recovery and optional Telegram.
 
 ## CONNECT interception CA
 
@@ -125,14 +135,14 @@ For a live non-production proof, issue a fresh single-use manifest and run
 `scripts/prove-gh-proxy.sh`. It configures an unmodified `gh api user` through
 `HTTPS_PROXY`, provides only the public CA and capability-reference GitHub token to the
 workload, and relies on Charon to resolve the mapped value. The CA key,
-Vaultwarden session, mapped item, and resolved value remain absent from the
+KeePass database, optional key file, mapped entry, and resolved value remain absent from the
 workload.
 
 Rotate a persona intermediate independently using the bounded overlap in the
 realm contract: validate a second root-signed intermediate, select it for new
 leaves, drain old tunnels, then destroy the retiring key. Workspace trust does
 not change. A compromised intermediate requires immediate isolation of that
-realm endpoint, key/session revocation, and realm rebuild; unrelated realms and
+realm endpoint, key revocation and credential rotation, and realm rebuild; unrelated realms and
 the offline root remain unchanged. Production credentials remain prohibited
 until the explicit owner security review covers ADR 0002 and ADR 0003.
 
@@ -173,7 +183,7 @@ generations.
 
 [`examples/transparent-gateway.toml`](../examples/transparent-gateway.toml) is
 the public contract consumed by downstream Infra. Run Charon as a dedicated
-non-root UID/GID. That identity alone owns the provider session, CA private key,
+non-root UID/GID. That identity alone owns the KeePass database, admin state, TLS private keys,
 receipt journal, and hash-chain state. Directories are `0700`; private files are
 `0400` or `0600`; the public CA can be `0644`. Do not mount application state,
 Hermes `/opt/data`, Git credential files, Docker sockets, or control-plane data.
@@ -187,7 +197,7 @@ iptables, nftables, Compose, or host policy.
 
 The normal `listen` address remains the network-restricted control and explicit
 proxy endpoint. `/healthz` proves the process is alive. `/readyz` checks the
-provider and receipt writer without resolving a credential. A failed provider,
+KeePass store and receipt writer without resolving a credential. A locked store,
 receipt state, CA, listener bind, policy validation, or DNS/TLS operation fails
 closed. Restart policy should be `on-failure`; readiness failure removes the
 gateway from service but must not open a bypass route.
@@ -210,7 +220,7 @@ charon healthcheck http://127.0.0.1:3129/readyz
 
 Safe rollout uses a synthetic credential and isolated upstream first. Prove an
 exact read and mutation, each configured hydration sink in use, response
-streaming/cancellation, an omitted capability denial before provider access,
+streaming/cancellation, an omitted capability denial before credential lookup,
 service-loss denial, direct-egress denial, IPv6/QUIC denial, a metadata-only
 receipt, and restart without credential artifacts. For Git, disable hooks,
 credential helpers, recursive submodules, alternate object stores, and
@@ -218,7 +228,7 @@ caller-controlled URL rewrites in the workload policy; allow only the exact
 smart-HTTP hostname and paths and select an opaque Git media type.
 
 Rollback removes the transparent route before stopping Charon, restores the
-previous immutable image plus its complete policy/CA/provider mapping, verifies
+previous immutable image plus its complete policy/CA/KeePass mapping, verifies
 readiness, then restores the route. Application state remains on its independent
 persistent volume. For Hermes that means `/opt/data` survives every Charon,
 plugin, and image change; Charon neither mounts nor modifies it.
