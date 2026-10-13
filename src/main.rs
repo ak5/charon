@@ -4,9 +4,11 @@ use std::{future::IntoFuture as _, path::PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use charon::{
+    admin::{Admin, AdminConfig},
     ca,
     config::Config,
-    provider,
+    gateway::{Gateway, GatewayConfig},
+    keepass::KeePassStore,
     proxy::{AppState, app, serve_transparent},
 };
 use tokio::net::TcpListener;
@@ -16,13 +18,42 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 #[allow(clippy::too_many_lines)]
 async fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let command = parse_command()?;
     tracing_subscriber::fmt()
         .json()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "charon=info".into()))
+        .with_env_filter(EnvFilter::new("off,charon=info"))
         .init();
 
-    let command = parse_command()?;
     let config_path = match command {
+        Command::GatewayValidate(path) => {
+            GatewayConfig::load(&path)?;
+            println!("valid workload gateway v1");
+            return Ok(());
+        }
+        Command::GatewayServe(path) => {
+            let config = GatewayConfig::load(&path)?;
+            let listen = config.listen;
+            let secrets = std::sync::Arc::new(KeePassStore::new(config.keepass.clone())?);
+            let (mut admin_task, admin_handle, approvals) =
+                start_admin(config.admin.clone(), secrets.clone())?;
+            let gateway =
+                std::sync::Arc::new(Gateway::new(config, secrets)?.with_approvals(approvals));
+            let listener = TcpListener::bind(listen)
+                .await
+                .context("gateway bind failed")?;
+            info!(%listen, "exclusive workload gateway listening");
+            let server = axum::serve(listener, gateway.router())
+                .with_graceful_shutdown(shutdown_signal())
+                .into_future();
+            tokio::select! {
+                result = server => { result.context("gateway server failed")?; }
+                result = &mut admin_task => { result??; bail!("admin server stopped unexpectedly"); }
+            }
+            admin_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+            admin_task.await??;
+            return Ok(());
+        }
         Command::Healthcheck(url) => return healthcheck(&url).await,
         Command::CaGenerate {
             name,
@@ -74,7 +105,9 @@ async fn main() -> Result<()> {
     };
     let config = Config::load(&config_path)?;
     let listen = config.listen;
-    let secrets = provider::build(&config.provider)?;
+    let secrets = std::sync::Arc::new(KeePassStore::new(config.keepass.clone())?);
+    let (mut admin_task, admin_handle, approvals) =
+        start_admin(config.admin.clone(), secrets.clone())?;
     let transparent = config
         .services
         .iter()
@@ -84,7 +117,7 @@ async fn main() -> Result<()> {
                 .map(|address| (service.name.clone(), address))
         })
         .collect::<Vec<_>>();
-    let state = std::sync::Arc::new(AppState::new(config, secrets)?);
+    let state = std::sync::Arc::new(AppState::new(config, secrets)?.with_approvals(approvals));
     let listener = TcpListener::bind(listen)
         .await
         .with_context(|| format!("failed to bind {listen}"))?;
@@ -113,6 +146,7 @@ async fn main() -> Result<()> {
     tokio::pin!(control);
     tokio::select! {
         result = &mut control => result.context("server failed")?,
+        result = &mut admin_task => { result??; bail!("admin server stopped unexpectedly"); }
         () = shutdown_signal() => {
             let _ = shutdown_tx.send(true);
             control.await.context("server failed during graceful shutdown")?;
@@ -127,6 +161,8 @@ async fn main() -> Result<()> {
         }
     }
     let _ = shutdown_tx.send(true);
+    admin_handle.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
+    admin_task.await??;
     while let Some(result) = tasks.join_next().await {
         result.context("transparent listener task failed")??;
     }
@@ -134,6 +170,8 @@ async fn main() -> Result<()> {
 }
 
 enum Command {
+    GatewayServe(PathBuf),
+    GatewayValidate(PathBuf),
     Serve(PathBuf),
     Healthcheck(String),
     CaGenerate {
@@ -157,6 +195,10 @@ enum Command {
 fn parse_command() -> Result<Command> {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     match args.as_slice() {
+        [flag, path] if flag == "--gateway-config" => Ok(Command::GatewayServe(path.into())),
+        [gateway, validate, path] if gateway == "gateway" && validate == "validate" => {
+            Ok(Command::GatewayValidate(path.into()))
+        }
         [flag, path] if flag == "--config" => Ok(Command::Serve(path.into())),
         [command, url] if command == "healthcheck" => {
             Ok(Command::Healthcheck(url.clone().into_string().map_err(
@@ -195,7 +237,7 @@ fn parse_command() -> Result<Command> {
             Ok(Command::PolicyInventory(path.into()))
         }
         _ => bail!(
-            "usage: charon --config <path> | charon healthcheck <url> | charon policy validate <config> | charon policy inventory <config> | charon ca generate <name> <certificate> <private-key> | charon ca validate <certificate> <private-key> | charon ca fingerprint <certificate> | charon ca export <certificate> <output>"
+            "usage: charon --gateway-config <path> | charon gateway validate <path> | charon --config <path> | charon healthcheck <url> | charon policy validate <config> | charon policy inventory <config> | charon ca generate <name> <certificate> <private-key> | charon ca validate <certificate> <private-key> | charon ca fingerprint <certificate> | charon ca export <certificate> <output>"
         ),
     }
 }
@@ -241,4 +283,38 @@ async fn shutdown_signal() {
         () = ctrl_c => {},
         () = terminate => {},
     }
+}
+
+/// Start locked-boot administration independently of workload listeners.
+type AdminRuntime = (
+    tokio::task::JoinHandle<Result<()>>,
+    axum_server::Handle<std::net::SocketAddr>,
+    Option<std::sync::Arc<charon::telegram::Telegram>>,
+);
+
+fn start_admin(
+    config: Option<AdminConfig>,
+    store: std::sync::Arc<KeePassStore>,
+) -> Result<AdminRuntime> {
+    let config =
+        config.context("HTTPS admin configuration is required for interactive KeePass unlock")?;
+    let origin = config.origin.clone();
+    let (admin, enrollment) = Admin::new(config, store)?;
+    if let Some(code) = enrollment {
+        use secrecy::ExposeSecret as _;
+        // Explicit operator-console bootstrap output, never a structured log or Telegram message.
+        eprintln!(
+            "Charon enrollment code (expires in five minutes): {}",
+            code.expose_secret()
+        );
+    }
+    info!(%origin, "HTTPS admin starting; vault locked");
+    let approvals = admin.approvals();
+    let handle = axum_server::Handle::new();
+    let task_handle = handle.clone();
+    Ok((
+        tokio::spawn(async move { admin.serve(task_handle).await }),
+        handle,
+        approvals,
+    ))
 }

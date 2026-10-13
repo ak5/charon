@@ -16,8 +16,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 for name in \
-    CHARON_IMAGE CHARON_FIXTURE_DIRECTORY CHARON_BW_CLI_PATH \
-    CHARON_BW_APPDATA_PATH CHARON_BW_SESSION_PATH \
+    CHARON_IMAGE CHARON_FIXTURE_DIRECTORY CHARON_KDBX_PATH \
+    CHARON_ADMIN_CERTIFICATE_PATH CHARON_ADMIN_PRIVATE_KEY_PATH CHARON_ADMIN_BIND_IP \
     CHARON_EGRESS_PROXY_PASSWORD_PATH; do
     eval "value=\${$name:-}"
     if [ -z "$value" ]; then
@@ -31,16 +31,31 @@ export CHARON_CA_CERTIFICATE_PATH="$CHARON_FIXTURE_DIRECTORY/ca.pem"
 export CHARON_CA_PRIVATE_KEY_PATH="$CHARON_FIXTURE_DIRECTORY/ca-key.pem"
 export CHARON_ROOT_CA_CERTIFICATE_PATH="$CHARON_FIXTURE_DIRECTORY/root-ca.pem"
 export CHARON_RECEIPT_STATE_PATH="$CHARON_FIXTURE_DIRECTORY/receipts"
-mkdir -p "$CHARON_RECEIPT_STATE_PATH"
-chmod 700 "$CHARON_RECEIPT_STATE_PATH"
+export CHARON_LOCKED_RECEIPT_STATE_PATH="$CHARON_FIXTURE_DIRECTORY/locked-receipts"
+export CHARON_ADMIN_STATE_PATH="$CHARON_FIXTURE_DIRECTORY/admin-state"
+export CHARON_LOCKED_ADMIN_STATE_PATH="$CHARON_FIXTURE_DIRECTORY/locked-admin-state"
+for path in "$CHARON_RECEIPT_STATE_PATH" "$CHARON_LOCKED_RECEIPT_STATE_PATH" "$CHARON_ADMIN_STATE_PATH" "$CHARON_LOCKED_ADMIN_STATE_PATH"; do
+    mkdir -p "$path"
+    chmod 700 "$path"
+done
 export CHARON_MANIFEST_DIRECTORY="$CHARON_FIXTURE_DIRECTORY/manifests"
 export CHARON_RUNTIME_UID="${CHARON_RUNTIME_UID:-$(id -u)}"
 
 compose build workload
-cargo run --locked --quiet --example vertical_fixture -- issue "$CHARON_FIXTURE_DIRECTORY"
 
 mkdir -p "$evidence_dir"
 compose up --detach --no-build --wait --wait-timeout 30 charon charon-locked
+# Enrollment output is operator-console-only, never retained with evidence.
+compose logs --no-color charon | sed -n '/Charon enrollment code (expires in five minutes): /p' >&2
+printf 'Enroll and unlock at the configured HTTPS admin origin, then press Enter.
+' >&2
+read -r _
+compose exec -T charon /usr/local/bin/charon healthcheck http://127.0.0.1:3129/readyz
+if compose exec -T charon-locked /usr/local/bin/charon healthcheck http://127.0.0.1:3129/readyz >/dev/null 2>&1; then
+    printf 'locked fixture unexpectedly ready\n' >&2
+    exit 1
+fi
+cargo run --locked --quiet --example vertical_fixture -- issue "$CHARON_FIXTURE_DIRECTORY"
 compose run --name "$workload_name" workload >"$evidence_dir/cases.jsonl"
 
 docker inspect "$workload_name" >"$evidence_dir/workload-inspect.json"
@@ -48,10 +63,10 @@ docker inspect "$(compose ps --quiet charon)" "$(compose ps --quiet charon-locke
     >"$evidence_dir/charon-inspect.json"
 docker history --no-trunc "$(compose images --quiet workload)" \
     >"$evidence_dir/workload-image-history.txt"
-compose logs --no-color charon charon-locked >"$evidence_dir/charon.log"
+compose logs --no-color charon charon-locked | sed '/Charon enrollment code (expires in five minutes): /d' >"$evidence_dir/charon.log"
 
 if grep -Eiq \
-    'github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|CHARON_(BW|CA_PRIVATE)|VAULTWARDEN_SESSION|offline-root-key|BEGIN [A-Z ]*PRIVATE KEY' \
+    'github_pat_|ghp_|gho_|ghu_|ghs_|ghr_|CHARON_(KDBX|ADMIN_PRIVATE|CA_PRIVATE)|offline-root-key|BEGIN [A-Z ]*PRIVATE KEY' \
     "$evidence_dir/workload-inspect.json"; then
     printf 'credential-like material found in workload inspect output\n' >&2
     exit 1
@@ -77,6 +92,5 @@ test "$(grep -c '"outcome":"denied"' "$evidence_dir/cases.jsonl")" = 5
 grep -q '"outcome":"forwarded"' "$evidence_dir/charon.log"
 grep -q '"outcome":"identity_denied"' "$evidence_dir/charon.log"
 grep -q '"outcome":"tunneled_request_denied"' "$evidence_dir/charon.log"
-grep -q '"error":"Vaultwarden provider is locked"' "$evidence_dir/charon.log"
 
 printf 'vertical evidence: %s\n' "$evidence_dir"
