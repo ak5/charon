@@ -105,7 +105,13 @@ the prompt; the decision precedes lookup/forwarding. Denial, cancellation,
 capacity exhaustion, delivery failure and timeout return fixed denials. Approval
 waits count against `max_duration_seconds` and expire after at most two minutes.
 The bot uses direct Charon-only HTTPS egress, independent of workload proxy routes.
-It never receives request bodies, brokered values or master passwords.
+It receives the complete pre-substitution application request: method, destination,
+path, query values, forwarded headers and UTF-8 body. Public capability references
+stand for KeePass values; recognized caller credential headers are masked.
+Unrelated inline secrets are not automatically detectable, so gating authorizes
+request-content disclosure to Telegram. Show request details is a view action,
+not an approval. See [owner operations](../docs/admin.md#telegram) for exact
+rendering/redaction rules and limits.
 
 ## Streaming and sessions
 
@@ -115,7 +121,12 @@ are policy choices and do not change other listener modes. Unknown-length
 uploads can reach the origin partially before an overflow; streaming cannot
 retract a remote side effect. Total operation time includes approval waits, credential lookup and DNS work,
 upstream headers and upload. Body streams stop on overflow, idle timeout, total
-timeout, dependency error, or disconnect. Bodies are not buffered to completion.
+timeout, dependency error, or disconnect. Ungated uploads remain streamed. Every
+Telegram-gated request body is buffered within the smaller of 64 KiB and the route
+byte limit, with a ten-second read timeout. Original bytes are forwarded after
+approval. Non-UTF-8 bodies or previews exceeding 3500 bytes deny before lookup or
+egress; nothing is silently omitted or truncated. See
+[owner operations](../docs/admin.md#telegram) for rendering and redaction.
 SSE/model responses stream through rolling byte redaction, without semantic
 prompt/body inspection. Binary downloads retain their bytes on secretless
 routes. Credential routes redact known raw/rendered credentials and URL/base64

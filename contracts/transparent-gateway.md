@@ -53,7 +53,15 @@ URL-encoded form field.
 
 JSON and form bodies are buffered only to the request limit because semantic
 mutation cannot be performed safely on arbitrary chunks. Header, path, query,
-Basic, Git, and opaque request bodies retain streaming and backpressure.
+Basic, Git, and opaque request bodies retain streaming and backpressure when
+ungated. Every Telegram-gated body is buffered within the smaller of 64 KiB and
+the request limit, with a ten-second read timeout. The complete pre-substitution
+application request is displayed, including query values, forwarded headers and
+the UTF-8 body. Capability references remain visible instead of resolved values;
+recognized caller credential headers are masked. Non-UTF-8 bodies or previews
+over 3500 bytes deny before lookup. Original body bytes are retained for forwarding.
+Detail views do not authorize requests or extend expiry; see
+[owner operations](../docs/admin.md#telegram) for disclosure and rendering rules.
 Caller-supplied Authorization is removed or denied when it is not the declared
 sink. Routing, authority, framing, proxy authentication, and hop-by-hop fields
 cannot be hydration sinks.

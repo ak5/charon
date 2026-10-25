@@ -49,7 +49,7 @@ telegram_bot_token_entry_id = "00000000-0000-4000-8000-000000000003"
 [admin.telegram]
 user_id = 123456789
 approval_capabilities = ["first", "second"]
-approval_descriptions = { first = "Send the first test API password to the configured first endpoint", second = "Send the second test API password to the configured second endpoint" }
+approval_descriptions = { first = "Call the first test API using its saved password", second = "Call the second test API using its saved password" }
 ```
 
 The example names belong to the E2E fixture. For deployment, use names that exist
@@ -59,6 +59,11 @@ Descriptions are public operator-written authority summaries, not workload-provi
 operation claims. Every gated name requires exactly one nonblank printable ASCII
 description of at most 240 bytes; unknown or missing description keys reject
 configuration. Do not put private resource names or secrets in descriptions.
+Request details show the complete request before credential substitution,
+including headers, query values and the full UTF-8 body. Charon references remain
+visible instead of KeePass values; recognized caller credential headers are
+masked. Enabling a gate discloses this request content to Telegram. See
+[preview limits and redaction](admin.md#telegram) before enabling sensitive routes.
 
 No bot token goes into environment variables or deployment env files. Rotate the
 token by editing KeePass, then lock/unlock to reload it. Changing the owner ID or
@@ -70,6 +75,11 @@ poller. If reusing a bot, deliberately remove its previous webhook through
 Telegram's `deleteWebhook` API; Charon does not silently change bot ownership or
 webhook state. Telegram documents the polling/webhook exclusion in the
 [Bot API](https://core.telegram.org/bots/api#getupdates).
+
+Prompt delivery preserves the active long poll. API failures log only the method,
+HTTP status, or transport flags; token-bearing URLs and Telegram response bodies
+are never logged. A `getUpdates` HTTP 409 indicates a polling conflict; check for
+another running Charon instance or test using the same bot.
 
 ## Verify
 

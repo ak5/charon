@@ -97,7 +97,24 @@ requests fail closed while no valid decision is available.
 
 Selected requests receive allow-once and deny buttons before credential resolution
 or upstream forwarding. The callback must match the owner, private chat, exact
-sent message and random expiring request handle. It can be consumed once.
+sent message and random expiring request handle. A decision consumes it once.
+After accepting a decision, Charon attempts to replace the prompt with a fixed
+decision message without buttons and acknowledge the callback before releasing
+the waiting request. Prompts lead with the public action description and the
+actual HTTP method/destination/path. **Show request details** expands the same
+message into a redacted `http` code block with all headers, query values and the complete body while
+keeping Allow once / Deny available. Viewing requires the same owner, private
+chat, original message and live handle checks; it neither approves the request
+nor consumes the decision or extends its expiry. Expired/consumed prompts cannot
+reveal details. The final message names the decision, HTTP method and destination/path, for
+example `Allowed once: send authenticated POST request to https://api.example/items`.
+It removes the code block and buttons. This records authorization, not upstream
+success. Telegram controls highlighting; Charon sends
+explicit text entities rather than parsing request data as Markdown or HTML.
+Each feedback call has a two-second timeout. Display updates
+are best-effort: an outage or stopped process may leave stale buttons visible,
+but the consumed handle cannot authorize another request. The displayed choice
+does not establish that the upstream operation succeeded.
 Decisions do not create durable rules or bypass identity, sink, destination,
 method, path, receipt, or resource checks. Approval expires after two minutes or
 the gateway's shorter deadline. Lock drops the token snapshot, cancels polling
@@ -105,11 +122,35 @@ and pending decisions; unlocking starts a fresh channel session. Decisions from
 before a lock cannot authorize requests after another unlock. Restart requires
 owner unlock and cannot send a locked-boot notification.
 
-The bot sees capability names, configured authority descriptions and HTTP methods,
-not credentials, request URLs, payloads, enrollment codes, or master passwords.
-Approval releases one use of the configured capability; it does not review a
-particular resource or request body. Local policy still limits the request.
-Descriptions are public: do not include private resources or secrets.
+The bot receives capability names, public action descriptions, and the complete
+request before credential substitution: method, destination, path, query values,
+forwarded headers and the full UTF-8 body, including nested JSON and form data.
+`{{charon.<capability>}}` references remain visible; KeePass values are resolved
+only after approval and never enter the preview. Path references are decoded for
+readability; query/form encoding and body bytes are retained. Basic authentication
+is displayed as `Basic base64(username:{{charon.<capability>}})` so the password
+reference can be read. Transport framing added by the HTTP client is not part of
+this application request preview. Headers removed by forwarding policy are not
+shown; Host is derived from the authorized destination.
+
+Recognized caller credential headers (Authorization, Cookie, API-key/token headers,
+headers marked sensitive, and Charon workload identity) retain their names but
+show `[redacted caller credential]`, unless they are the validated Charon
+credential sink containing a public reference. No secret lookup is needed to
+build this view. Unrelated inline secrets in custom headers, query values or
+body content cannot be identified automatically. Enabling a gate authorizes
+sending that request content to Telegram; use Charon references for credentials.
+Enrollment codes and master passwords are never added to previews.
+
+Every gated request body is buffered before approval within the smaller of
+64 KiB and the route byte limit, with a ten-second read timeout. Original bytes
+are retained for forwarding. Non-UTF-8 bodies and request previews exceeding
+3500 bytes are denied before lookup or egress, never truncated. Control and
+non-ASCII characters are escaped to prevent misleading rendering. Empty bodies
+are supported. Ungated requests retain their existing streaming behavior.
+
+Approval releases only the waiting request represented by the preview; it does
+not verify an original shell command or establish upstream success.
 
 Each process admits at most 10 approval prompts in a rolling 60-second window
 and holds at most 32 pending approvals. Excess gated requests fail closed

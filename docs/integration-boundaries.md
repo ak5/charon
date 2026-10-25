@@ -108,9 +108,16 @@ Requests pass identity, policy and sink checks before they create a prompt, and
 must receive a fresh allow-once decision before credential resolution or upstream
 forwarding. Each callback verifies numeric actor and private chat identity,
 original message ID, random token and expiry. Failure denies the request. The bot
-receives only capability/method metadata, required public operator-written
-`approval_descriptions`, and the admin URL. Approval covers one capability use,
-not semantic review of a resource or request body. Prompt admission is bounded
+receives required public operator-written `approval_descriptions`, the admin
+URL and the complete pre-substitution application request: method, destination,
+path, query values, forwarded headers and UTF-8 body. Public capability references
+remain visible; recognized caller credential headers/workload identity are masked.
+Unrelated inline secrets cannot be detected automatically. Enabling a gate
+consents to disclosure of this request content to Telegram. Gated bodies are
+buffered within 64 KiB and ten seconds and retained unchanged; non-UTF-8 or
+oversized (3500-byte preview) requests fail closed before lookup/egress.
+The one-use handle releases only that waiting request, not an original shell command.
+Prompt admission is bounded
 to 10 per rolling minute and 32 pending per process, including canceled/denied
 prompts in the rate budget; ungated requests bypass this budget. It never transports
 enrollment codes, master passwords or credential values. The bot token is loaded from an operator-only protected KeePass entry after

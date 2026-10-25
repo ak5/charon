@@ -31,7 +31,8 @@ response body, public registration state, and receipt files; it also proves that
 Charon never modifies the database.
 
 `password_api.rs` is a small Rust TLS HTTP server. Its `/first` and `/second`
-POST endpoints require the matching Bearer password and return only
+POST endpoints require the matching Bearer password and the unchanged synthetic
+JSON operation shown in the approval preview, and return only
 `{"ok":true,"endpoint":"first"}` or the corresponding second endpoint JSON.
 A wrong credential returns 401 and `ok:false`, without reflecting the password.
 
@@ -55,8 +56,12 @@ that denied requests never reach the password API and that human denial performs
 no credential lookup. Existing callback tests separately cover wrong chat/message
 and expired/unsent handles, concurrent request binding, description validation,
 and prompt-rate exhaustion/recovery. Prompts include a public configured authority
-summary and explicitly describe capability-level approval rather than resource
-or request-body review.
+summary and the actual method/destination/path plus the public `operation` JSON
+field under Show request details, along with all forwarded headers, query values
+and body fields. Charon references remain visible in place of resolved secrets. The test expands the redacted HTTP code block
+and proves that viewing alone performs no workload lookup or forwarding.
+Preview-specific tests cover redaction, Unicode escaping, unchanged body bytes
+and fail-closed format/size limits.
 
 The connected flow uses a cryptographic software WebAuthn authenticator over
 real HTTPS. `browser-admin-check` separately exercises the actual HTML/JavaScript
@@ -74,10 +79,41 @@ Stop other consumers of that bot. Discover your numeric private ID if needed:
 mise exec -- python tests/e2e/live_telegram.py --discover-owner
 ```
 
-Create a separate operator-owned KDBX in your KeePass application, outside this
-repository, with three protected Password fields: `synthetic-first-password-e2e`,
-`synthetic-second-password-e2e`, and your dedicated test bot token. Record the
-canonical UUID of each entry. Keep the file private (mode `0600`). The harness
+Create a separate operator-owned KDBX outside this repository with KeePassXC's
+standard CLI (on macOS, install it with `brew install --cask keepassxc`):
+
+```sh
+umask 077
+mkdir -p "$HOME/.local/share/charon-test"
+db="$HOME/.local/share/charon-test/test-bot.kdbx"
+nice -n 10 keepassxc-cli db-create -p "$db"
+nice -n 10 keepassxc-cli add -p "$db" first
+nice -n 10 keepassxc-cli add -p "$db" second
+nice -n 10 keepassxc-cli add -p "$db" telegram-bot
+chmod 600 "$db"
+```
+
+Choose a test-only master password at the first hidden prompt. Each `add` asks
+for that master password and then the new entry's password. Enter
+`synthetic-first-password-e2e` for `first`, `synthetic-second-password-e2e` for
+`second`, and the dedicated bot token for `telegram-bot`. Do not pass secrets as
+arguments or redirect them to a file. Skip `db-create` if this test database
+already exists.
+The KeePassXC GUI is also suitable; use protected Password fields.
+
+Read only the public entry UUIDs, converting them to Charon's canonical format:
+
+```sh
+for entry in first second telegram-bot; do
+  printf '%s: ' "$entry"
+  nice -n 10 keepassxc-cli show -a Uuid "$db" "$entry" \
+    | python3 -c 'import sys, uuid; print(uuid.UUID(sys.stdin.read().strip()))'
+done
+```
+
+The attribute name is `Uuid` in KeePassXC 2.8.0; these commands do not display
+Password fields. See the [official CLI manual](https://github.com/keepassxreboot/keepassxc/blob/develop/docs/man/keepassxc-cli.1.adoc).
+Keep the file private (mode `0600`). The harness
 reads this file and never writes it, copies it, or adds real tokens to generated
 fixtures. Do not use your production vault.
 
@@ -103,9 +139,13 @@ The live test runs the password API and proxy against this operator-owned KDBX.
 It scripts owner enrollment/unlock and sends real Telegram messages. In your
 bot's private chat, press **Allow once** for `first`: curl must get successful
 JSON. Then press **Deny** for `second`: curl must get 403 and the second API must
-not be called. Each decision expires after two minutes. The unlocked notification
-URL uses the reserved fixture hostname; do not use it as a production admin
-address. This pass verifies real delivery/buttons/polling; Chrome verifies UI.
+not be called. Each decision expires after two minutes. The notification identifies
+the live test and omits its reserved admin hostname. Allowed once / Denied messages
+replace the code block and buttons with a plain sentence identifying the HTTP
+method and destination/path. Show request details
+does not approve anything or extend the two-minute decision window. Rendering uses
+Telegram's built-in `http` highlighting; client themes control its appearance.
+This pass verifies real delivery/buttons/polling; Chrome verifies UI.
 
 The live test is opt-in and is never run by `mise run check` or `mise run e2e`.
 Run it only against a test bot, then rotate/revoke that token if disposing of it.

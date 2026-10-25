@@ -37,7 +37,7 @@ Start with the document that owns the question you are trying to answer.
   identity context.
 - [Architecture decisions](adr/): decisions and their rationale.
 - [Local Telegram approval scope](adr/0009-local-telegram-allow-once.md):
-  capability-level decisions, prompt limits, and failure behavior.
+  redacted request previews, prompt limits, and failure behavior.
 - [Machine-readable contracts](../contracts/README.md): protocol schemas,
   OpenAPI documents, and canonicalization rules.
 

@@ -565,7 +565,7 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
             outcome: ReceiptOutcome::Denied,
         },
     };
-    let (parts, body) = request.into_parts();
+    let (parts, mut body) = request.into_parts();
     ensure!(
         !parts.headers.contains_key(http::header::UPGRADE)
             && parts.method != Method::CONNECT
@@ -662,6 +662,8 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
     .map_err(|_| anyhow::anyhow!("destination address denied"))?;
     ensure!(addresses.next().is_some(), "destination address denied");
     let mut protected = Vec::new();
+    let mut preview_parts = parts.clone();
+    preview_parts.headers = headers.clone();
     ensure!(
         state.approvals.is_some()
             || state
@@ -677,7 +679,14 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
                 timeout(
                     Duration::from_secs(route.max_duration_seconds)
                         .saturating_sub(started.elapsed()),
-                    approvals.authorize(&route.name, parts.method.as_str()),
+                    approvals.authorize_request(
+                        &route.name,
+                        &preview_parts,
+                        &target,
+                        &mut body,
+                        route.max_request_bytes,
+                        None,
+                    ),
                 )
                 .await
                 .map_err(|_| anyhow::anyhow!("human approval timed out"))??;
@@ -699,7 +708,14 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
                 timeout(
                     Duration::from_secs(route.max_duration_seconds)
                         .saturating_sub(started.elapsed()),
-                    approvals.authorize(&route.name, parts.method.as_str()),
+                    approvals.authorize_request(
+                        &route.name,
+                        &preview_parts,
+                        &target,
+                        &mut body,
+                        route.max_request_bytes,
+                        Some(&crate::broker::HydrationSink::Header { name: name.clone() }),
+                    ),
                 )
                 .await
                 .map_err(|_| anyhow::anyhow!("human approval timed out"))??;
@@ -743,7 +759,16 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
                 timeout(
                     Duration::from_secs(route.max_duration_seconds)
                         .saturating_sub(started.elapsed()),
-                    approvals.authorize(&route.name, parts.method.as_str()),
+                    approvals.authorize_request(
+                        &route.name,
+                        &preview_parts,
+                        &target,
+                        &mut body,
+                        route.max_request_bytes,
+                        Some(&crate::broker::HydrationSink::Basic {
+                            username: username.clone(),
+                        }),
+                    ),
                 )
                 .await
                 .map_err(|_| anyhow::anyhow!("human approval timed out"))??;

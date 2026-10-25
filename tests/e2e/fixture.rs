@@ -211,7 +211,7 @@ impl Fixture {
         if let Some(user_id) = live_user {
             let mut policy = Bot::config();
             policy.user_id = user_id;
-            bot.channel = crate::telegram::Telegram::new(&policy, ORIGIN, store.clone())?;
+            bot.channel = crate::telegram::Telegram::test_live(&policy, ORIGIN, store.clone())?;
             admin_config.telegram = Some(policy);
         }
         let (admin, code) =
@@ -311,6 +311,8 @@ impl Fixture {
                 http::header::AUTHORIZATION,
                 "Bearer wrong-synthetic-password",
             )
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(r#"{"operation":"synthetic-e2e"}"#)
             .send()
             .await?;
         ensure!(

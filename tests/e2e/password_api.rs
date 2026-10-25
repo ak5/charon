@@ -2,7 +2,7 @@
 use crate::tls::TlsAuthority;
 use anyhow::Result;
 use axum::{
-    body::Body,
+    body::{Body, to_bytes},
     http::{Response, StatusCode},
 };
 use hyper_util::rt::TokioIo;
@@ -74,13 +74,18 @@ pub async fn start(
                                 "Bearer {}",
                                 passwords[index].expose_secret()
                             ));
-                            let matched = name != "unknown"
+                            let authenticated = name != "unknown"
                                 && request.method() == http::Method::POST
                                 && request
                                     .headers()
                                     .get(http::header::AUTHORIZATION)
                                     .and_then(|v| v.to_str().ok())
                                     == Some(expected.expose_secret());
+                            let upload = to_bytes(Body::new(request.into_body()), 4096).await;
+                            let matched = authenticated
+                                && upload.ok().and_then(|bytes| {
+                                    serde_json::from_slice::<serde_json::Value>(&bytes).ok()
+                                }) == Some(json!({"operation":"synthetic-e2e"}));
                             let body =
                                 Body::from(json!({"ok":matched,"endpoint":name}).to_string());
                             let response = Response::builder()
