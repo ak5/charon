@@ -108,7 +108,11 @@ Requests pass identity, policy and sink checks before they create a prompt, and
 must receive a fresh allow-once decision before credential resolution or upstream
 forwarding. Each callback verifies numeric actor and private chat identity,
 original message ID, random token and expiry. Failure denies the request. The bot
-receives only capability/method metadata and the admin URL. It never transports
+receives only capability/method metadata, required public operator-written
+`approval_descriptions`, and the admin URL. Approval covers one capability use,
+not semantic review of a resource or request body. Prompt admission is bounded
+to 10 per rolling minute and 32 pending per process, including canceled/denied
+prompts in the rate budget; ungated requests bypass this budget. It never transports
 enrollment codes, master passwords or credential values. The bot token is loaded from an operator-only protected KeePass entry after
 owner unlock. Lock cancels the channel and pending decisions. The token
 belongs only to Charon and must not be shared with a workload's Telegram bot.

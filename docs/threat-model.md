@@ -27,6 +27,14 @@ capability without placing the underlying credential in that workload.
   drops the snapshot, cancels polling and pending decisions. Exact configured capabilities require a
   fresh allow-once decision before credential lookup or upstream forwarding.
   Callbacks bind the private actor, chat, message, random token, and expiry.
+  Required operator-written public descriptions explain capability authority;
+  they must not contain secrets or private resource names. Approval covers one
+  capability use, not semantic review of a resource or request body. Charon
+  admits at most 10 prompts per rolling minute and 32 pending per process;
+  cancellation/denial does not refund the rate budget, and lock/unlock does not
+  reset it. A workload can exhaust the budget and deny gated requests until it
+  recovers. Restart resets the in-memory budget. Owner unlock notifications are
+  outside this limit; network-layer workload limits remain necessary.
   Telegram transports the admin URL and metadata, never enrollment codes,
   passwords, credential values, or request bodies.
 - **Upstream egress:** an optional authenticated forward proxy. It controls

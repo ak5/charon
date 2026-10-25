@@ -207,7 +207,8 @@ See [BotFather setup](docs/telegram-setup.md) and the
 [two-password E2E fixture](tests/e2e/README.md).
 
 Optional `[admin.telegram]` settings select one positive private user/chat ID
-and exact capability or route names requiring approval. Store the bot token in
+and exact capability or route names requiring approval, each with a required
+public `approval_descriptions` authority summary. Store the bot token in
 an operator-only protected KeePass Password field and set
 `keepass.telegram_bot_token_entry_id` to its exact UUID, outside workload mappings.
 Start a private chat with the bot before using it. After HTTPS owner unlock,
@@ -217,7 +218,9 @@ another owner unlock. No bot token or master password is read from environment
 variables or password files. Each decision expires after at most two minutes;
 gateway deadlines may shorten it. Unavailable delivery, timeout, denial, and
 cancellation fail closed. Telegram never receives the vault password, enrollment
-code, or workload credential values.
+code, or workload credential values. Approval covers one use of the configured
+capability; it does not review a particular resource or request body. Prompt
+admission is limited to 10 per rolling minute and 32 pending per process.
 
 ## Project boundaries
 

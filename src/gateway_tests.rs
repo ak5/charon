@@ -923,6 +923,41 @@ async fn human_decision_precedes_credential_lookup_and_cannot_widen_policy() -> 
 }
 
 #[tokio::test]
+async fn unavailable_approval_worker_does_not_block_ungated_routes() -> Result<()> {
+    // No Telegram worker consumes prompts or decisions in this fixture.
+    let approvals = crate::telegram::Telegram::test_coordinator(vec!["credential".into()])?;
+    let fixture = fixture_with_approvals(Some(approvals.clone())).await?;
+    let client = client(&fixture)?;
+    let gated = client
+        .get("https://allowed.test/credential")
+        .header("authorization", "Bearer {{charon.credential}}");
+    let waiting = tokio::spawn(async move { gated.send().await });
+    for _ in 0..1000 {
+        if approvals.test_pending_count()? > 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    assert_eq!(approvals.test_pending_count()?, 1);
+    for (path, auth) in [
+        ("plain", None),
+        ("api/v3/user", Some("token {{charon.gh-user}}")),
+    ] {
+        let mut request = client.get(format!("https://allowed.test/{path}"));
+        if let Some(auth) = auth {
+            request = request.header("authorization", auth);
+        }
+        let response = tokio::time::timeout(Duration::from_secs(5), request.send()).await??;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(!response.text().await?.contains(SENTINEL));
+    }
+    assert!(!waiting.is_finished());
+    assert_eq!(fixture.provider.lookup_count(), 1);
+    waiting.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn credential_gateway_readiness_requires_unlock() -> Result<()> {
     let fixture = fixture().await?;
     let client = reqwest::Client::builder().no_proxy().build()?;

@@ -36,6 +36,9 @@ passkeys_file = "/var/lib/charon/admin/passkeys.json"
 # [admin.telegram]
 # user_id = 123456789
 # approval_capabilities = [] # Exact capability/route names; allow once per request.
+# approval_descriptions = {} # Required public authority description for each gated name.
+# Example: approval_capabilities = ["github-write"]
+# approval_descriptions = { github-write = "Write GitHub issues under the configured local policy" }
 
 [identity]
 issuer = "example-control-plane"

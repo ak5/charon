@@ -49,11 +49,17 @@ telegram_bot_token_entry_id = "00000000-0000-4000-8000-000000000003"
 [admin.telegram]
 user_id = 123456789
 approval_capabilities = ["first", "second"]
+approval_descriptions = { first = "Send the first test API password to the configured first endpoint", second = "Send the second test API password to the configured second endpoint" }
 ```
 
 The example names belong to the E2E fixture. For deployment, use names that exist
 in your `capabilities` (`--config`) or `routes` (`--gateway-config`). Use your bot
 entry's actual UUID and never include it in workload `keepass.items` mappings.
+Descriptions are public operator-written authority summaries, not workload-provided
+operation claims. Every gated name requires exactly one nonblank printable ASCII
+description of at most 240 bytes; unknown or missing description keys reject
+configuration. Do not put private resource names or secrets in descriptions.
+
 No bot token goes into environment variables or deployment env files. Rotate the
 token by editing KeePass, then lock/unlock to reload it. Changing the owner ID or
 entry UUID requires a configuration update and restart; workload input cannot

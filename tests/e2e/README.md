@@ -53,7 +53,10 @@ callback cannot approve a request after restart. The bot entry cannot be mapped
 to a workload credential reference. Assertions prove
 that denied requests never reach the password API and that human denial performs
 no credential lookup. Existing callback tests separately cover wrong chat/message
-and expired/unsent handles.
+and expired/unsent handles, concurrent request binding, description validation,
+and prompt-rate exhaustion/recovery. Prompts include a public configured authority
+summary and explicitly describe capability-level approval rather than resource
+or request-body review.
 
 The connected flow uses a cryptographic software WebAuthn authenticator over
 real HTTPS. `browser-admin-check` separately exercises the actual HTML/JavaScript

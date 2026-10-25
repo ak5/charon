@@ -82,6 +82,16 @@ impl Bot {
         TelegramConfig {
             user_id: 123,
             approval_capabilities: vec!["first".into(), "second".into()],
+            approval_descriptions: std::collections::HashMap::from([
+                (
+                    "first".into(),
+                    "Send the first test API password to the configured first endpoint".into(),
+                ),
+                (
+                    "second".into(),
+                    "Send the second test API password to the configured second endpoint".into(),
+                ),
+            ]),
         }
     }
     pub fn fail_next_message(&self) {
