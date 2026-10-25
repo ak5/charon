@@ -6,6 +6,12 @@ owner production-activation review or a live deployment proof.
 
 ## Verified behavior
 
+- On 2026-10-25, the opt-in live test passed against the official Telegram Bot
+  API using an operator-owned KDBX: Allow once returned successful JSON from the
+  first API, and Deny returned 403 for the second with no additional credential
+  lookup or upstream API call. Accepted prompts were replaced with decision
+  messages. This is local harness evidence, not deployed-host isolation proof.
+
 - `tests/e2e/` connects a real encrypted two-password KDBX, HTTPS admin,
   software passkey, actual Telegram worker with local Bot API transport, curl
   workload, intercepted TLS and a password-checking Rust JSON API. It verifies
@@ -29,7 +35,20 @@ owner production-activation review or a live deployment proof.
 - Telegram callback tests bind private actor/chat identity and original message
   ID, reject unsent/expired/canceled handles, consume decisions once, and exercise
   the allow-once wait path. A local fake bot API verifies post-unlock notifications,
-  prompt buttons and callback polling. An intercepted TLS request proves that
+  prompt buttons and callback polling. Worker regression tests verify that
+  decision feedback removes the buttons before releasing either an allowed or
+  denied request; a mocked edit failure preserves the authenticated decision.
+  The final message retains trusted action context; the live-test notification
+  omits the reserved fixture admin URL.
+  Preview tests verify full method/destination/path/query/header/body display,
+  nested JSON, public credential references, recognized caller credential masking,
+  readable Basic references, Unicode escaping and byte-preserving body replay.
+  Non-UTF-8 or oversized previews deny before a prompt.
+  Detail-action tests cover owner/chat/message rejection, unchanged decision and
+  expiry, post-consumption rejection, and inert payload formatting with UTF-16
+  code-block offsets. The connected test expands details before choosing and
+  verifies that viewing causes no workload lookup or forwarding.
+  An intercepted TLS request proves that
   denial causes no credential lookup and allow-once permits exactly one lookup.
   Unknown policy names and missing/extra/blank/oversized/nonprintable authority
   descriptions fail configuration validation. Concurrent-request tests verify
@@ -67,9 +86,11 @@ passkey-device recovery and deployment startup remain operator responsibilities.
 The bot token is a protected operator-only KeePass entry, excluded from workload
 mappings. Telegram stays idle before unlock and stops on lock; no bot token
 environment variable or master-password file exists. Use a dedicated approval bot inaccessible to the
-workload. Telegram sees policy names, public operator-written authority descriptions
-and methods. It is an approval authority for one capability use; it does not review
-resources or request bodies and has no vault unlock authority.
+workload. Telegram sees policy descriptions and the complete pre-substitution
+application request, including forwarded headers, query values and UTF-8 body.
+Public Charon references stand for KeePass values; recognized caller credential
+headers are masked. Unrelated inline secrets cannot be detected automatically.
+Original shell commands are not verified; the channel has no vault unlock authority.
 
 The Docker vertical fixture requires an operator-controlled Docker daemon,
 browser-trusted admin TLS, an encrypted disposable KDBX, and approved egress.

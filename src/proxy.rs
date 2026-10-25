@@ -522,8 +522,26 @@ async fn forward_inner_as(
         "approval channel unavailable"
     );
     if let Some(approvals) = &state.approvals {
+        let mut preview_parts = parts.clone();
+        preview_parts.headers = filtered_headers(&parts.headers)?.into_iter().collect();
+        if matches!(
+            policy.response.compression,
+            CompressionPolicy::IdentityOnly | CompressionPolicy::Reject
+        ) {
+            preview_parts.headers.insert(
+                http::header::ACCEPT_ENCODING,
+                HeaderValue::from_static("identity"),
+            );
+        }
         approvals
-            .authorize(&identity.capability, parts.method.as_str())
+            .authorize_request(
+                &identity.capability,
+                &preview_parts,
+                &target,
+                &mut body,
+                MAX_REQUEST_BODY_BYTES,
+                Some(&policy.hydration.sink),
+            )
             .await?;
     }
     let secret = state

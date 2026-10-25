@@ -218,8 +218,13 @@ another owner unlock. No bot token or master password is read from environment
 variables or password files. Each decision expires after at most two minutes;
 gateway deadlines may shorten it. Unavailable delivery, timeout, denial, and
 cancellation fail closed. Telegram never receives the vault password, enrollment
-code, or workload credential values. Approval covers one use of the configured
-capability; it does not review a particular resource or request body. Prompt
+code, or resolved workload credential values. Approval shows the complete
+application request before substitution: method, destination/path/query, forwarded
+headers and body. Public `{{charon.<capability>}}` references stand for KeePass
+values; recognized caller credential headers are masked. Request content goes to
+Telegram, so unrelated inline secrets must not be supplied. Gated bodies are
+buffered and must fit the text preview; see [preview limits](docs/admin.md#telegram).
+Each decision releases that waiting request. Prompt
 admission is limited to 10 per rolling minute and 32 pending per process.
 
 ## Project boundaries

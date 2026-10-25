@@ -11,6 +11,7 @@ use tokio::{net::TcpListener, sync::mpsc};
 #[derive(Clone)]
 struct Api {
     messages: mpsc::Sender<Value>,
+    edits: mpsc::Sender<Value>,
     updates: Arc<tokio::sync::Mutex<mpsc::Receiver<Value>>>,
     next: Arc<AtomicI64>,
     fail_next: Arc<AtomicBool>,
@@ -35,11 +36,16 @@ async fn updates(State(api): State<Api>) -> Json<Value> {
 async fn ack() -> Json<Value> {
     Json(json!({"ok":true,"result":true}))
 }
+async fn edit(State(api): State<Api>, Json(body): Json<Value>) -> Json<Value> {
+    let _ = api.edits.send(body).await;
+    Json(json!({"ok":true,"result":true}))
+}
 pub struct Bot {
     pub channel: Arc<Telegram>,
     pub endpoint: String,
     fail_next: Arc<AtomicBool>,
     pub messages: mpsc::Receiver<Value>,
+    edits: mpsc::Receiver<Value>,
     updates: mpsc::Sender<Value>,
     next_update: i64,
     pub task: tokio::task::JoinHandle<()>,
@@ -47,10 +53,12 @@ pub struct Bot {
 impl Bot {
     pub async fn start(origin: &str, store: Arc<crate::keepass::KeePassStore>) -> Result<Self> {
         let (messages, receive) = mpsc::channel(32);
+        let (edits, edited) = mpsc::channel(32);
         let (update_sender, incoming) = mpsc::channel(32);
         let fail_next = Arc::new(AtomicBool::new(false));
         let api = Api {
             messages,
+            edits,
             updates: Arc::new(tokio::sync::Mutex::new(incoming)),
             next: Arc::new(AtomicI64::new(1)),
             fail_next: fail_next.clone(),
@@ -59,7 +67,7 @@ impl Bot {
             .route("/botsynthetic:token/sendMessage", post(send))
             .route("/botsynthetic:token/getUpdates", post(updates))
             .route("/botsynthetic:token/answerCallbackQuery", post(ack))
-            .route("/botsynthetic:token/editMessageReplyMarkup", post(ack))
+            .route("/botsynthetic:token/editMessageText", post(edit))
             .with_state(api);
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
@@ -73,6 +81,7 @@ impl Bot {
             endpoint,
             fail_next,
             messages: receive,
+            edits: edited,
             updates: update_sender,
             next_update: 1,
             task,
@@ -85,11 +94,11 @@ impl Bot {
             approval_descriptions: std::collections::HashMap::from([
                 (
                     "first".into(),
-                    "Send the first test API password to the configured first endpoint".into(),
+                    "Call the first test API using its saved password".into(),
                 ),
                 (
                     "second".into(),
-                    "Send the second test API password to the configured second endpoint".into(),
+                    "Call the second test API using its saved password".into(),
                 ),
             ]),
         }
@@ -116,6 +125,32 @@ impl Bot {
         let data = prompt["reply_markup"]["inline_keyboard"][0][button]["callback_data"]
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("missing callback"))?;
+        self.click(prompt, data, user).await
+    }
+    pub async fn view(&mut self, prompt: &Value) -> Result<Value> {
+        let data = prompt["reply_markup"]["inline_keyboard"][1][0]["callback_data"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing view button"))?;
+        self.click(prompt, data, 123).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let edit = self
+                    .edits
+                    .recv()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("missing request details"))?;
+                if edit["message_id"] == prompt["message_id"]
+                    && edit["text"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Request details (secrets hidden)\n"))
+                {
+                    return Ok(edit);
+                }
+            }
+        })
+        .await?
+    }
+    async fn click(&mut self, prompt: &Value, data: &str, user: i64) -> Result<()> {
         ensure!(
             prompt["chat_id"].as_i64() == Some(123),
             "wrong prompt recipient"

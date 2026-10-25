@@ -14,18 +14,37 @@ async fn decision(fixture: &mut Fixture, name: &str, allow: bool) -> Result<(u16
     ensure!(
         prompt["text"]
             .as_str()
-            .is_some_and(|text| text.contains(&format!("Capability: {name}"))),
+            .is_some_and(|text| text.contains(&format!("Permission: {name}"))),
         "wrong approval capability"
     );
     let text = prompt["text"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing prompt text"))?;
     ensure!(
-        text.contains(&format!("Authority: Send the {name} test API password"))
-            && text.contains("Resource and request body are not reviewed"),
+        text.contains(&format!(
+            "Call the {name} test API using its saved password"
+        )) && text.contains(&format!("POST https://password.test/{name}")),
         "misleading approval scope"
     );
     no_values(&prompt.to_string())?;
+    let lookups = fixture.store.lookup_count();
+    let details = fixture.bot.view(&prompt).await?;
+    ensure!(
+        !request.is_finished() && fixture.store.lookup_count() == lookups,
+        "viewing details authorized a request"
+    );
+    ensure!(
+        details["text"]
+            .as_str()
+            .is_some_and(|text| text.contains(r#""operation":"synthetic-e2e""#)
+                && text.contains("authorization: Bearer {{charon.")),
+        "public JSON operation missing from details"
+    );
+    ensure!(
+        details["entities"][0]["language"] == "http",
+        "HTTP code block missing"
+    );
+    no_values(&details.to_string())?;
     fixture.bot.decide(&prompt, allow, 123).await?;
     tokio::time::timeout(std::time::Duration::from_secs(5), request).await??
 }
@@ -246,6 +265,14 @@ async fn two_passwords_approval_and_restart() -> Result<()> {
 #[tokio::test]
 #[ignore = "sends real Telegram test prompts; run the explicit live wrapper"]
 async fn live_telegram_allow_and_deny() -> Result<()> {
+    // Show only our fixed channel metadata, never dependency HTTP URL diagnostics.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            "off,charon::telegram=warn",
+        ))
+        .with_ansi(false)
+        .with_writer(std::io::stderr)
+        .try_init();
     let user_id = std::env::var("CHARON_E2E_TELEGRAM_USER_ID")?.parse::<i64>()?;
     ensure!(user_id > 0, "positive private user ID required");
     let password = {
@@ -279,9 +306,14 @@ async fn live_telegram_allow_and_deny() -> Result<()> {
     ensure!(
         status == 200
             && serde_json::from_str::<Value>(&body)? == json!({"ok":true,"endpoint":"first"}),
-        "live allow did not reach the password API"
+        "live allow expected successful first API JSON; received HTTP {status}"
     );
     no_values(&body)?;
+    ensure!(
+        fixture.calls.load(Ordering::SeqCst) == 1,
+        "live allow expected one API call; received {}",
+        fixture.calls.load(Ordering::SeqCst)
+    );
     println!("Now press Deny for capability second.");
     let lookups = fixture.store.lookup_count();
     let (status, body) = tokio::time::timeout(
@@ -290,10 +322,18 @@ async fn live_telegram_allow_and_deny() -> Result<()> {
     )
     .await???;
     ensure!(
-        status == 403
-            && fixture.calls.load(Ordering::SeqCst) == 1
-            && fixture.store.lookup_count() == lookups,
-        "live denial performed lookup or reached the API"
+        status == 403,
+        "live denial expected HTTP 403; received {status}"
+    );
+    ensure!(
+        fixture.calls.load(Ordering::SeqCst) == 1,
+        "live denial expected API call count 1; received {}",
+        fixture.calls.load(Ordering::SeqCst)
+    );
+    ensure!(
+        fixture.store.lookup_count() == lookups,
+        "live denial changed credential lookup count from {lookups} to {}",
+        fixture.store.lookup_count()
     );
     no_values(&body)?;
     println!(

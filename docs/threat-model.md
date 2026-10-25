@@ -27,16 +27,38 @@ capability without placing the underlying credential in that workload.
   drops the snapshot, cancels polling and pending decisions. Exact configured capabilities require a
   fresh allow-once decision before credential lookup or upstream forwarding.
   Callbacks bind the private actor, chat, message, random token, and expiry.
+  A valid callback consumes its handle before bounded UI feedback (two seconds
+  per call) and before releasing the request. Feedback failure does not change
+  the authenticated decision; existing approval expiry and vault-generation
+  checks still apply. Stale visible buttons are not authorization state.
+  The non-authorizing detail action uses the same private owner/chat/message and
+  live-handle checks. It reveals only the already-redacted cached request,
+  leaves its decision pending and does not extend expiry. Code blocks use
+  explicit UTF-16 text entities; request contents are never parsed as markup.
   Required operator-written public descriptions explain capability authority;
-  they must not contain secrets or private resource names. Approval covers one
-  capability use, not semantic review of a resource or request body. Charon
+  they must not contain secrets. Telegram receives the complete pre-substitution
+  application request: method, destination, path, query values, forwarded headers
+  and UTF-8 body. Public `{{charon.<capability>}}` references remain visible;
+  Basic references are decoded into explicit base64 notation. Charon credentials
+  are resolved only after approval. Recognized caller credential headers and
+  workload identity are masked; unrelated inline secrets cannot be detected
+  automatically. Operators must account for disclosure of request content to
+  Telegram, including custom headers and nested body fields. No content allowlist
+  silently omits parts of an approved request. Headers removed by forwarding policy
+  and client-generated framing are outside the application preview.
+  All gated bodies are buffered within 64 KiB and a ten-second read before a
+  prompt; original bytes are retained. Non-UTF-8 bodies or previews exceeding
+  3500 bytes deny before lookup/egress rather than appearing partially reviewed.
+  Control/non-ASCII characters are escaped; code entities keep contents inert.
+  Ungated streams are unchanged. The handle releases one request, not a shell
+  command or a reusable operation class. Charon
   admits at most 10 prompts per rolling minute and 32 pending per process;
   cancellation/denial does not refund the rate budget, and lock/unlock does not
   reset it. A workload can exhaust the budget and deny gated requests until it
   recovers. Restart resets the in-memory budget. Owner unlock notifications are
   outside this limit; network-layer workload limits remain necessary.
   Telegram transports the admin URL and metadata, never enrollment codes,
-  passwords, credential values, or request bodies.
+  passwords, resolved credential values, or unlisted request body fields.
 - **Upstream egress:** an optional authenticated forward proxy. It controls
   network route/source IP but does not decide which persona credential to use.
   Its Basic-auth password is a Charon-only protected file, never URL/config
