@@ -76,9 +76,13 @@ does not use `upstream_proxy` or ambient proxy variables. Permit Charon-only
 HTTPS/DNS egress to that host when Telegram is enabled. Configure its owner as
 one immutable positive numeric `user_id`, and configure `approval_capabilities`
 with exact capability names (signed/transparent mode) or route names (exclusive
-gateway mode). Unknown names are configuration errors. No name is inferred from
-request content. Store the bot token in a dedicated protected Password field in
-KeePass. Set `keepass.telegram_bot_token_entry_id` to that entry's canonical UUID.
+gateway mode). Unknown names are configuration errors. Set `approval_descriptions`
+to a map with exactly the same names and a public operator-written description of each
+capability's authority. Descriptions must be nonblank printable ASCII, at most
+240 bytes each; missing, extra, or invalid descriptions reject configuration.
+No name or description is inferred from request content. Store the bot token in a
+dedicated protected Password field in KeePass. Set
+`keepass.telegram_bot_token_entry_id` to that entry's canonical UUID.
 It must not appear in `keepass.items`: workload credential mappings cannot access
 it. There is no environment token or master-password file. Deployment env files
 contain only nonsecret listener/image/revision settings.
@@ -101,9 +105,29 @@ and pending decisions; unlocking starts a fresh channel session. Decisions from
 before a lock cannot authorize requests after another unlock. Restart requires
 owner unlock and cannot send a locked-boot notification.
 
-The bot sees capability names and HTTP methods, not credentials, URLs with query
-strings, payloads, enrollment codes, or master passwords. Workload Telegram traffic
-must use a different bot identity; do not share the approval bot token with it.
+The bot sees capability names, configured authority descriptions and HTTP methods,
+not credentials, request URLs, payloads, enrollment codes, or master passwords.
+Approval releases one use of the configured capability; it does not review a
+particular resource or request body. Local policy still limits the request.
+Descriptions are public: do not include private resources or secrets.
+
+Each process admits at most 10 approval prompts in a rolling 60-second window
+and holds at most 32 pending approvals. Excess gated requests fail closed
+without queuing a prompt. Completed, canceled, and denied prompts still consume
+the rate budget; lock/unlock does not reset it. Ungated requests do not consume
+this budget. A process restart resets the in-memory budget. A workload can
+exhaust it and temporarily deny approvals; enforce workload traffic limits at
+the network boundary. These bounds do not limit owner unlock notifications.
+Workload Telegram traffic must use a different bot identity; do not share the
+approval bot token with it.
+
+The local gate has no durable approval history or reusable grants. Workload
+request failures use the gateway's redacted denial logs; exclusive gateway
+receipts record denied requests with policy metadata, without distinguishing an
+owner denial from timeout or unavailable approval. Channel failures produce a
+generic warning without the Bot API URL or token. Callback handles and message
+contents are not audit fields. A successful approval means permission to proceed,
+not proof that the upstream operation succeeded.
 
 ## Recovery
 

@@ -6,12 +6,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 use tokio::sync::{mpsc, oneshot};
 const APPROVAL_TTL: Duration = Duration::from_secs(120);
+const PROMPT_WINDOW: Duration = Duration::from_secs(60);
+const PROMPTS_PER_WINDOW: usize = 10;
 
 /// Trusted operator settings. The bot token comes only from the unlocked `KeePass` store.
 #[derive(Clone, Debug, Deserialize)]
@@ -21,6 +23,9 @@ pub struct TelegramConfig {
     pub user_id: i64,
     /// Exact capability/route names requiring a fresh human decision for each request.
     pub approval_capabilities: Vec<String>,
+    /// Public, operator-written authority descriptions; exactly one per gated name.
+    #[serde(default)]
+    pub approval_descriptions: HashMap<String, String>,
 }
 impl TelegramConfig {
     /// Validate the private recipient and exact approval policy names.
@@ -44,6 +49,18 @@ impl TelegramConfig {
                 "invalid Telegram approval capability"
             );
         }
+        ensure!(
+            self.approval_descriptions.len() == names.len()
+                && names
+                    .iter()
+                    .all(|name| self
+                        .approval_descriptions
+                        .get(*name)
+                        .is_some_and(|description| !description.trim().is_empty()
+                            && description.len() <= 240
+                            && description.bytes().all(|b| matches!(b, b' '..=b'~')))),
+            "Telegram requires one public printable ASCII description (1-240 bytes) per gated capability"
+        );
         Ok(())
     }
     /// Reject approval rules that do not name a configured capability or route.
@@ -71,16 +88,18 @@ struct Prompt {
     token: SecretString,
     capability: String,
     method: String,
+    description: String,
 }
 /// Local approval coordinator, with bounded pending state and single-use callbacks.
 pub struct Telegram {
     user: i64,
-    capabilities: HashSet<String>,
+    capabilities: HashMap<String, String>,
     store: Option<Arc<crate::keepass::KeePassStore>>,
     #[cfg(test)]
     token: Option<SecretString>,
     client: reqwest::Client,
     pending: Mutex<HashMap<[u8; 32], Pending>>,
+    recent_prompts: Mutex<VecDeque<Instant>>,
     send: mpsc::Sender<Prompt>,
     receive: tokio::sync::Mutex<mpsc::Receiver<Prompt>>,
     origin: String,
@@ -118,18 +137,6 @@ impl Telegram {
     }
     fn build(config: &TelegramConfig, origin: &str) -> Result<Arc<Self>> {
         config.validate()?;
-        let mut capabilities = HashSet::new();
-        for name in &config.approval_capabilities {
-            ensure!(
-                !name.is_empty()
-                    && name.len() <= 128
-                    && name
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-                    && capabilities.insert(name.clone()),
-                "invalid Telegram approval capability"
-            );
-        }
         let client = reqwest::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
@@ -138,12 +145,13 @@ impl Telegram {
         let (send, receive) = mpsc::channel(32);
         Ok(Arc::new(Self {
             user: config.user_id,
-            capabilities,
+            capabilities: config.approval_descriptions.clone(),
             store: None,
             #[cfg(test)]
             token: None,
             client,
             pending: Mutex::new(HashMap::new()),
+            recent_prompts: Mutex::new(VecDeque::new()),
             send,
             receive: tokio::sync::Mutex::new(receive),
             origin: origin.into(),
@@ -156,6 +164,10 @@ impl Telegram {
         Self::with_token(
             &TelegramConfig {
                 user_id: 123,
+                approval_descriptions: names
+                    .iter()
+                    .map(|name| (name.clone(), format!("Use test capability {name}")))
+                    .collect(),
                 approval_capabilities: names,
             },
             "https://charon.example",
@@ -207,9 +219,9 @@ impl Telegram {
     /// # Errors
     /// Denies timeout, cancellation, queue saturation, channel failure, or a human denial.
     pub async fn authorize(&self, capability: &str, method: &str) -> Result<()> {
-        if !self.capabilities.contains(capability) {
+        let Some(description) = self.capabilities.get(capability) else {
             return Ok(());
-        }
+        };
         let mut epoch = self.store.as_ref().map(|store| store.changes());
         if let Some(store) = &self.store {
             store.health()?;
@@ -227,6 +239,17 @@ impl Telegram {
                 .map_err(|_| anyhow::anyhow!("approval unavailable"))?;
             pending.retain(|_, p| p.expires > Instant::now() && !p.reply.is_closed());
             ensure!(pending.len() < 32, "approval capacity unavailable");
+            let now = Instant::now();
+            let mut recent = self
+                .recent_prompts
+                .lock()
+                .map_err(|_| anyhow::anyhow!("approval unavailable"))?;
+            recent.retain(|at| now.duration_since(*at) < PROMPT_WINDOW);
+            ensure!(
+                recent.len() < PROMPTS_PER_WINDOW,
+                "approval rate unavailable"
+            );
+            recent.push_back(now);
             pending.insert(
                 hash,
                 Pending {
@@ -242,6 +265,7 @@ impl Telegram {
                 token,
                 capability: capability.into(),
                 method: method.into(),
+                description: description.clone(),
             })
             .is_ok();
         let result = if sent {
@@ -315,7 +339,7 @@ impl Telegram {
                     let hash: [u8;32]=Sha256::digest(prompt.token.expose_secret().as_bytes()).into();
                     let live=self.pending.lock().is_ok_and(|p|p.get(&hash).is_some_and(|p|p.expires>Instant::now()&&!p.reply.is_closed()));
                     if !live{continue;}
-                    let sent=self.call("sendMessage",json!({"chat_id":self.user,"text":format!("Allow one request?\nCapability: {}\nMethod: {}\nExpires in two minutes.",prompt.capability,prompt.method),"reply_markup":{"inline_keyboard":[[{"text":"Allow once","callback_data":format!("a:{}",prompt.token.expose_secret())},{"text":"Deny","callback_data":format!("d:{}",prompt.token.expose_secret())}]]}})).await;
+                    let sent=self.call("sendMessage",json!({"chat_id":self.user,"text":format!("Allow one use of this capability?\nCapability: {}\nAuthority: {}\nMethod: {}\nResource and request body are not reviewed by this approval.\nExpires within two minutes; the request deadline may be shorter.",prompt.capability,prompt.description,prompt.method),"reply_markup":{"inline_keyboard":[[{"text":"Allow once","callback_data":format!("a:{}",prompt.token.expose_secret())},{"text":"Deny","callback_data":format!("d:{}",prompt.token.expose_secret())}]]}})).await;
                     if let Ok(mut pending)=self.pending.lock(){
                         match sent.ok().and_then(|v|v.get("message_id").and_then(Value::as_i64)) {
                             Some(id)=>if let Some(p)=pending.get_mut(&hash){p.message=Some(id);},
@@ -446,16 +470,143 @@ mod tests {
             &TelegramConfig {
                 user_id: 123,
                 approval_capabilities: vec!["write".into()],
+                approval_descriptions: HashMap::from([(
+                    "write".into(),
+                    "Write using the configured test policy".into(),
+                )]),
             },
             "https://charon.example",
             SecretString::from("synthetic:token"),
         )
     }
     #[test]
+    fn descriptions_are_complete_public_and_bounded() -> Result<()> {
+        let valid = TelegramConfig {
+            user_id: 123,
+            approval_capabilities: vec!["write".into()],
+            approval_descriptions: HashMap::from([("write".into(), "Write test data".into())]),
+        };
+        valid.validate_inventory(["write"].into_iter())?;
+        for description in [
+            String::new(),
+            " ".into(),
+            "x".repeat(241),
+            "line\nbreak".into(),
+            "hidden\u{202e}text".into(),
+        ] {
+            let mut config = valid.clone();
+            config
+                .approval_descriptions
+                .insert("write".into(), description);
+            assert!(config.validate().is_err());
+        }
+        let mut missing = valid.clone();
+        missing.approval_descriptions.clear();
+        assert!(missing.validate().is_err());
+        let mut extra = valid;
+        extra
+            .approval_descriptions
+            .insert("other".into(), "Other authority".into());
+        assert!(extra.validate().is_err());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn prompt_rate_is_bounded_even_after_decisions_and_recovers_after_window() -> Result<()> {
+        let t = coordinator()?;
+        for _ in 0..PROMPTS_PER_WINDOW {
+            let gate = t.clone();
+            let request = tokio::spawn(async move { gate.authorize("write", "POST").await });
+            t.test_decide_next(true).await?;
+            request.await??;
+        }
+        assert!(t.authorize("write", "POST").await.is_err());
+        assert_eq!(t.test_pending_count()?, 0);
+        t.authorize("read", "GET").await?;
+        let expired = Instant::now()
+            .checked_sub(PROMPT_WINDOW)
+            .ok_or_else(|| anyhow::anyhow!("test clock underflow"))?;
+        for at in t
+            .recent_prompts
+            .lock()
+            .map_err(|_| anyhow::anyhow!("test mutex"))?
+            .iter_mut()
+        {
+            *at = expired;
+        }
+        let gate = t.clone();
+        let request = tokio::spawn(async move { gate.authorize("write", "POST").await });
+        t.test_decide_next(false).await?;
+        assert!(request.await?.is_err());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pending_capacity_exhaustion_does_not_enqueue_another_prompt() -> Result<()> {
+        let t = coordinator()?;
+        let mut receivers = Vec::new();
+        for index in 0..32 {
+            receivers.push(pending(
+                &t,
+                &format!("{index:032}"),
+                Some(456),
+                Instant::now() + APPROVAL_TTL,
+            )?);
+        }
+        assert!(t.authorize("write", "POST").await.is_err());
+        assert_eq!(t.test_pending_count()?, 32);
+        assert!(t.receive.lock().await.try_recv().is_err());
+        drop(receivers);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn concurrent_decisions_release_only_their_own_request() -> Result<()> {
+        let t = coordinator()?;
+        let mut tasks = Vec::new();
+        let mut prompts = Vec::new();
+        for _ in 0..2 {
+            let gate = t.clone();
+            tasks.push(tokio::spawn(async move {
+                gate.authorize("write", "POST").await
+            }));
+            prompts.push(
+                t.receive
+                    .lock()
+                    .await
+                    .recv()
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("missing prompt"))?,
+            );
+        }
+        for (index, prompt) in prompts.iter().enumerate() {
+            let hash: [u8; 32] = Sha256::digest(prompt.token.expose_secret().as_bytes()).into();
+            t.pending
+                .lock()
+                .map_err(|_| anyhow::anyhow!("test mutex"))?
+                .get_mut(&hash)
+                .ok_or_else(|| anyhow::anyhow!("missing pending request"))?
+                .message = Some(456 + i64::try_from(index)?);
+        }
+        let mut second = callback(prompts[1].token.expose_secret());
+        assert!(!t.callback(&second)); // Another request's message cannot release this request.
+        second["message"]["message_id"] = json!(457);
+        assert!(t.callback(&second));
+        assert!(!tasks[0].is_finished());
+        let mut first = callback(prompts[0].token.expose_secret());
+        first["data"] = json!(format!("d:{}", prompts[0].token.expose_secret()));
+        assert!(t.callback(&first));
+        assert!(tasks.remove(0).await?.is_err());
+        tasks.remove(0).await??;
+        assert!(!t.callback(&second));
+        Ok(())
+    }
+    #[test]
     fn configured_channel_requires_operator_entry_without_reading_a_secret_at_boot() -> Result<()> {
         let config = TelegramConfig {
             user_id: 123,
             approval_capabilities: vec!["write".into()],
+            approval_descriptions: HashMap::from([(
+                "write".into(),
+                "Write using the configured test policy".into(),
+            )]),
         };
         let mut keepass = crate::test_support::config("developer");
         keepass.items.clear();
@@ -567,6 +718,10 @@ mod tests {
         let cfg = TelegramConfig {
             user_id: 123,
             approval_capabilities: vec!["typo".into()],
+            approval_descriptions: HashMap::from([(
+                "typo".into(),
+                "Unknown test capability".into(),
+            )]),
         };
         assert!(cfg.validate_inventory(["write"].into_iter()).is_err());
         Ok(())
@@ -630,6 +785,11 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing approval prompt"))?;
         assert_eq!(prompt["chat_id"], json!(123));
+        let text = prompt["text"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("missing prompt text"))?;
+        assert!(text.contains("Authority: Write using the configured test policy"));
+        assert!(text.contains("Resource and request body are not reviewed"));
         assert_eq!(
             prompt["reply_markup"]["inline_keyboard"][0][0]["text"],
             json!("Allow once")

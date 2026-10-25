@@ -17,6 +17,15 @@ async fn decision(fixture: &mut Fixture, name: &str, allow: bool) -> Result<(u16
             .is_some_and(|text| text.contains(&format!("Capability: {name}"))),
         "wrong approval capability"
     );
+    let text = prompt["text"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing prompt text"))?;
+    ensure!(
+        text.contains(&format!("Authority: Send the {name} test API password"))
+            && text.contains("Resource and request body are not reviewed"),
+        "misleading approval scope"
+    );
+    no_values(&prompt.to_string())?;
     fixture.bot.decide(&prompt, allow, 123).await?;
     tokio::time::timeout(std::time::Duration::from_secs(5), request).await??
 }
