@@ -453,6 +453,11 @@ async fn register_start(State(admin): State<Arc<Admin>>, request: Request) -> Re
         return failed();
     };
     r.pending.retain(|_, p| p.deadline > Instant::now());
+    let session = session.filter(|id| {
+        r.sessions
+            .get(id)
+            .is_some_and(|expiry| *expiry > Instant::now())
+    });
     let initial = r.registrations.keys.is_empty();
     if initial {
         let Some((expected, deadline)) = r.enrollment else {
@@ -527,6 +532,11 @@ async fn register_finish(State(admin): State<Arc<Admin>>, request: Request) -> R
     let Ceremony::Registration(state, bound_session) = pending.ceremony else {
         return denied();
     };
+    let session = session.filter(|id| {
+        r.sessions
+            .get(id)
+            .is_some_and(|expiry| *expiry > Instant::now())
+    });
     if pending.deadline <= Instant::now()
         || r.registrations.keys.len() >= 8
         || bound_session != session
@@ -649,15 +659,31 @@ struct Unlock {
     password: SecretString,
 }
 async fn unlock(State(admin): State<Arc<Admin>>, request: Request) -> Response {
-    if admin.session(request.headers()).is_none() {
+    let Some(session) = admin.session(request.headers()) else {
         return denied();
-    }
+    };
+    let generation = admin.store.unlock_generation();
     let Ok(input) = body::<Unlock>(request).await else {
         return denied();
     };
     let password = input.password;
-    let store = admin.store.clone();
-    match tokio::task::spawn_blocking(move || store.unlock(password)).await {
+    match tokio::task::spawn_blocking(move || {
+        let runtime = admin
+            .runtime
+            .lock()
+            .map_err(|_| crate::keepass::StoreError::Unavailable)?;
+        if runtime
+            .sessions
+            .get(&session)
+            .is_none_or(|expiry| *expiry <= Instant::now())
+        {
+            return Err(crate::keepass::StoreError::Locked);
+        }
+        drop(runtime);
+        admin.store.unlock_at_generation(password, generation)
+    })
+    .await
+    {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         _ => (StatusCode::FORBIDDEN, "Unable to unlock vault").into_response(),
     }
@@ -676,6 +702,9 @@ async fn logout(State(admin): State<Arc<Admin>>, headers: HeaderMap) -> Response
         && let Ok(mut r) = admin.runtime.lock()
     {
         r.sessions.remove(&session);
+        if admin.store.cancel_unlocks().is_err() {
+            return failed();
+        }
     }
     (
         [(
@@ -935,6 +964,120 @@ mod tests {
                 std::io::Result<axum::body::Bytes>,
             >()))?;
         assert!(super::body::<Value>(request).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lock_and_logout_cancel_unlocks_still_reading_the_body() -> Result<()> {
+        for action in ["lock", "logout"] {
+            let fixture = Fixture::new()?;
+            let admin = &fixture.admin;
+            admin
+                .runtime
+                .lock()
+                .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+                .sessions
+                .insert(digest("synthetic-session"), Instant::now() + SESSION_TTL);
+            let session = format!("{COOKIE}=synthetic-session");
+            let (reading, read) = tokio::sync::oneshot::channel();
+            let (finish, finished) = tokio::sync::oneshot::channel();
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/api/unlock")
+                .header(header::ORIGIN, &admin.config.origin)
+                .header(header::COOKIE, &session)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from_stream(futures_util::stream::once(async move {
+                    let _ = reading.send(());
+                    finished.await.map_err(std::io::Error::other)?;
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from_static(
+                        br#"{"password":"synthetic-master"}"#,
+                    ))
+                })))?;
+            let pending = tokio::spawn(admin.router().oneshot(request));
+            read.await?;
+            assert_eq!(
+                post(
+                    admin,
+                    action,
+                    json!({}),
+                    Some(&session),
+                    Some(&admin.config.origin)
+                )
+                .await?
+                .status(),
+                StatusCode::NO_CONTENT
+            );
+            finish
+                .send(())
+                .map_err(|()| anyhow::anyhow!("upload closed"))?;
+            assert_eq!(pending.await??.status(), StatusCode::FORBIDDEN, "{action}");
+            assert!(admin.store.health().is_err(), "{action}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_during_registration_body_cannot_add_a_passkey() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let admin = &fixture.admin;
+        let mut owner = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        enroll(admin, &mut owner, fixture.code.expose_secret(), None).await?;
+        let session = login(admin, &mut owner).await?;
+        let start = value(
+            post(
+                admin,
+                "register/start",
+                json!({"code":""}),
+                Some(&session),
+                Some(&admin.config.origin),
+            )
+            .await?,
+        )
+        .await?;
+        let mut second = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        let credential = second.do_registration(
+            Url::parse(&admin.config.origin)?,
+            serde_json::from_value(start["options"].clone())?,
+        )?;
+        let payload = serde_json::to_vec(&json!({"id":start["id"], "credential":credential}))?;
+        let (reading, read) = tokio::sync::oneshot::channel();
+        let (finish, finished) = tokio::sync::oneshot::channel();
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/api/register/finish")
+            .header(header::ORIGIN, &admin.config.origin)
+            .header(header::COOKIE, &session)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from_stream(futures_util::stream::once(async move {
+                let _ = reading.send(());
+                finished.await.map_err(std::io::Error::other)?;
+                Ok::<_, std::io::Error>(axum::body::Bytes::from(payload))
+            })))?;
+        let pending = tokio::spawn(admin.router().oneshot(request));
+        read.await?;
+        post(
+            admin,
+            "logout",
+            json!({}),
+            Some(&session),
+            Some(&admin.config.origin),
+        )
+        .await?;
+        finish
+            .send(())
+            .map_err(|()| anyhow::anyhow!("upload closed"))?;
+        assert_eq!(pending.await??.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            admin
+                .runtime
+                .lock()
+                .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+                .registrations
+                .keys
+                .len(),
+            1
+        );
         Ok(())
     }
 

@@ -57,7 +57,7 @@ class AdmissionClient:
         if response.get("version") != 1 or response.get("operation_id") != operation.value["operation_id"]:
             return Admission(False, "invalid-request")
         reason = response.get("reason_code")
-        if reason not in _REASONS:
+        if not isinstance(reason, str) or reason not in _REASONS:
             return Admission(False, "invalid-request")
         if response.get("decision") != "allow":
             return Admission(False, reason)

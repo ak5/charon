@@ -18,7 +18,7 @@ from charon_hermes.compatibility import CLASSIFICATIONS, DEPLOYMENT_TOOLS, polic
 from charon_hermes.model import Operation, receipt_for
 from charon_hermes.plugin import CharonHermesPlugin, register
 from charon_hermes.service import Journal, Policy, Server
-from charon_hermes.protocol import request
+from charon_hermes.protocol import ProtocolError, receive_message, request
 
 
 class FakeContext:
@@ -101,10 +101,57 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.decide(operation.value), (False, "tool-not-allowed"))
 
 
+class ProtocolTests(unittest.TestCase):
+    def test_trickled_bytes_do_not_extend_the_deadline(self) -> None:
+        reader, writer = socket.socketpair()
+        def trickle():
+            try:
+                for _ in range(50):
+                    writer.sendall(b" ")
+                    time.sleep(0.01)
+            except OSError:
+                pass
+            finally:
+                writer.close()
+        thread = Thread(target=trickle, daemon=True)
+        thread.start()
+        started = time.monotonic()
+        try:
+            with self.assertRaises((ProtocolError, TimeoutError)):
+                receive_message(reader, started + 0.05)
+            self.assertLess(time.monotonic() - started, 0.5)
+        finally:
+            reader.close()
+            thread.join(timeout=1)
+
+    def test_duplicate_fields_deep_json_and_trailing_bytes_are_rejected(self) -> None:
+        for payload in [b'{"kind":"health","kind":"admit"}\n', b'[' * 1500 + b']' * 1500 + b'\n', b'{"kind":"health"}\nextra']:
+            reader, writer = socket.socketpair()
+            try:
+                writer.sendall(payload)
+                with self.assertRaises(ProtocolError):
+                    receive_message(reader, time.monotonic() + 1)
+            finally:
+                reader.close()
+                writer.close()
+
+
 class JournalTests(unittest.TestCase):
     def receipt(self) -> dict:
         operation = Operation.create("read_file", {}, "task", "call", "session")
         return receipt_for(operation, "authorization:1234567890abcdef", "", 1, False)
+
+    def test_second_writer_is_rejected_and_close_releases_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "state"
+            journal = Journal(directory)
+            with self.assertRaises(ValueError):
+                Journal(directory)
+            journal.append(self.receipt())
+            journal.close()
+            reopened = Journal(directory)
+            self.assertEqual(reopened._previous, journal._previous)
+            reopened.close()
 
     def test_short_writes_are_completed_and_synced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -115,7 +162,10 @@ class JournalTests(unittest.TestCase):
                 journal.append(self.receipt())
                 self.assertGreater(write.call_count, 1)
                 self.assertGreaterEqual(sync.call_count, 2)
-            self.assertEqual(Journal(directory)._previous, journal._previous)
+            journal.close()
+            reopened = Journal(directory)
+            self.assertEqual(reopened._previous, journal._previous)
+            reopened.close()
 
     def test_partial_write_failure_rolls_back_and_allows_retry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -135,7 +185,10 @@ class JournalTests(unittest.TestCase):
                     journal.append(receipt)
             self.assertEqual(journal._path.read_bytes(), b"")
             journal.append(receipt)
-            self.assertEqual(Journal(directory)._previous, journal._previous)
+            journal.close()
+            reopened = Journal(directory)
+            self.assertEqual(reopened._previous, journal._previous)
+            reopened.close()
 
     def test_sync_failure_is_not_acknowledged(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -145,6 +198,7 @@ class JournalTests(unittest.TestCase):
                     journal.append(self.receipt())
             with self.assertRaises(OSError):
                 journal.append(self.receipt())
+            journal.close()
 
     def test_recovery_discards_only_an_unterminated_tail(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -154,16 +208,84 @@ class JournalTests(unittest.TestCase):
             valid = journal._path.read_bytes()
             with journal._path.open("ab") as handle:
                 handle.write(b'{"receipt":')
+            journal.close()
             recovered = Journal(directory)
             self.assertEqual(recovered._previous, journal._previous)
             self.assertEqual(journal._path.read_bytes(), valid)
             with journal._path.open("ab") as handle:
                 handle.write(b"corrupt complete record\n")
+            recovered.close()
             with self.assertRaises(ValueError):
                 Journal(directory)
 
 
 class IntegrationTests(unittest.TestCase):
+    def test_malformed_fields_deny_without_crashing_or_creating_admissions(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ServiceFixture(Path(temporary))
+            try:
+                operation = Operation.create("read_file", {}, "task", "call", "session")
+                for changes in [{"classification": []}, {"argument_keys": [{}]}, {"version": True}]:
+                    response = request(fixture.socket_path, {"kind": "admit", "operation": {**operation.value, **changes}}, 500)
+                    self.assertEqual(response["decision"], "deny")
+                self.assertEqual(request(fixture.socket_path, {"kind": "admit"}, 500)["error"], "invalid-request")
+                self.assertFalse(fixture.server._authorizations)
+            finally:
+                fixture.close()
+
+    def test_admission_capacity_and_failed_journal_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ServiceFixture(Path(temporary))
+            try:
+                with patch("charon_hermes.service.MAX_ADMISSIONS", 1):
+                    operation = Operation.create("read_file", {}, "task", "call", "session")
+                    self.assertEqual(fixture.server.admit(operation.value)["decision"], "allow")
+                    other = Operation.create("read_file", {}, "task", "call2", "session")
+                    self.assertEqual(fixture.server.admit(other.value)["decision"], "deny")
+                    self.assertEqual(len(fixture.server._authorizations), 1)
+                fixture.server.journal._failed = True
+                self.assertEqual(fixture.server.health()["status"], "unavailable")
+                self.assertEqual(fixture.server.admit(other.value)["decision"], "deny")
+            finally:
+                fixture.close()
+
+    def test_slow_socket_is_closed_and_connection_capacity_is_released(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("charon_hermes.service.REQUEST_TIMEOUT_SECONDS", 0.05), patch("charon_hermes.service.MAX_CONNECTIONS", 1):
+                fixture = ServiceFixture(Path(temporary))
+                try:
+                    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    client.settimeout(1)
+                    client.connect(str(fixture.socket_path))
+                    client.sendall(b'{')
+                    self.assertEqual(client.recv(1), b'')
+                    client.close()
+                    # The handler releases its slot when it closes the first connection.
+                    self.assertTrue(fixture.server._connections.acquire(timeout=1))
+                    fixture.server._connections.release()
+                    self.assertEqual(request(fixture.socket_path, {"kind": "health"}, 500)["status"], "ready")
+                finally:
+                    fixture.close()
+
+    def test_same_call_id_in_different_sessions_keeps_receipts_separate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ServiceFixture(Path(temporary))
+            plugin = CharonHermesPlugin(Settings(fixture.socket_path, timeout_ms=500))
+            try:
+                for session in ["first", "second"]:
+                    self.assertIsNone(plugin.pre_tool_call("read_file", {}, session,
+                        tool_call_id="same-call", session_id=session))
+                plugin.post_tool_call("read_file", {}, "xx", "second",
+                    tool_call_id="same-call", session_id="second")
+                plugin.post_tool_call("read_file", {}, "x", "first",
+                    tool_call_id="same-call", session_id="first")
+                self.assertTrue(plugin._exporter.flush())
+                receipts = [json.loads(line)["receipt"] for line in fixture.server.journal._path.read_text().splitlines()]
+                self.assertEqual({item["session_id"]: item["result_size"] for item in receipts}, {"first": 1, "second": 2})
+            finally:
+                plugin._exporter.close()
+                fixture.close()
+
     def test_receipt_is_bound_to_complete_admitted_operation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = ServiceFixture(Path(temporary))
@@ -336,6 +458,7 @@ class IntegrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             journal = Journal(root / "state")
+            self.addCleanup(journal.close)
             operation = Operation.create("read_file", {}, "task", "call", "session")
             receipt = receipt_for(
                 operation,

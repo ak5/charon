@@ -972,6 +972,14 @@ async fn credential_gateway_readiness_requires_unlock() -> Result<()> {
         StatusCode::SERVICE_UNAVAILABLE
     );
     let mut config = fixture.gateway.config.clone();
+    config.receipts.journal_path = config
+        .receipts
+        .journal_path
+        .with_file_name("forward-receipts.jsonl");
+    config.receipts.state_path = config
+        .receipts
+        .state_path
+        .with_file_name("forward-checkpoint");
     config
         .routes
         .retain(|route| matches!(route.mediation, Mediation::Forward));

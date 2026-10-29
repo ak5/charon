@@ -52,3 +52,28 @@ flooding can still delay new owner sign-in, so admin reachability and connection
 limits remain deployment responsibilities. The Hermes journal is locally
 hash-chained, not independently signed; detecting malicious rewrites requires a
 trusted prior digest.
+
+## Second pass: 2026-10-30
+
+The second pass follows the connected code and concurrent failure paths. It
+assumes one Charon realm and one local Hermes admission process, not a shared
+multi-tenant gateway.
+
+| Finding | Fix and regression |
+| --- | --- |
+| An unlock upload begun before lock could commit afterward | Capture the generation before upload, recheck before decryption and commit; delayed-body lock/logout test |
+| A logged-out session could finish enrolling a recovery passkey | Recheck the bound live session under the registration lock after reading the body; real synthetic WebAuthn registration race test |
+| Local Hermes clients could retain unbounded threads/admission records, or extend a read deadline with trickled bytes | 32 connections, five-second server reads, absolute client deadlines, 4096-record caches; capacity, slow-socket and malformed-frame tests |
+| Reused tool-call IDs across Hermes sessions could swap receipt outcomes | Correlate hooks by session, tool, call ID and argument digest; reverse-order completion regression |
+| A denied reused nonce could overwrite its original expiry | Check membership before inserting, bound the cache without eviction; shortened-expiry replay regression |
+| Separate writers could fork either receipt hash chain | Exclusive journal file locks through recovery and append; second-writer rejection tests in Rust and Python |
+| Redacting a credential after JSON serialization could produce invalid JSON | Redact decoded strings, protected keys and matching primitive values before serialization; numeric, quoted-string and SSE JSON tests |
+| Adversarial nearly matching escaped responses could monopolize a worker beyond upstream-read deadlines | Cooperative scanning and an outer mediation deadline; long escaped-prefix cancellation regression |
+
+Hermes recovery also validates bounded closed receipt envelopes, and failed
+journals cannot continue admitting work after an irrecoverable write failure.
+
+Final local evidence includes `mise run check` with the exact pinned Hermes
+source, the connected offline two-password E2E, and the isolated Chrome passkey
+UI flow. These checks do not attest the live Telegram service or deployed k3s
+network policy. No independent security certification is claimed.

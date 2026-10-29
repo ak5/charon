@@ -677,12 +677,9 @@ async fn forward_authorized(
                 *format,
                 *max_record_bytes,
                 forbidden_fields.clone(),
-            );
-            Body::from_stream(redact_text_stream(
-                structured,
                 protected,
-                policy.response.max_bytes,
-            ))
+            );
+            Body::from_stream(structured)
         }
         ResponseMode::BufferedStructured {
             max_bytes,
@@ -693,18 +690,22 @@ async fn forward_authorized(
             while let Some(chunk) = chunks.next().await {
                 complete.extend_from_slice(&chunk?);
             }
-            let sanitized = sanitize_json_document(&complete, forbidden_fields)?;
+            let sanitized = sanitize_json_document(&complete, forbidden_fields, &protected).await?;
             complete.zeroize();
-            Body::from_stream(redact_text_stream(
-                futures_util::stream::once(async move {
-                    Ok::<_, std::io::Error>(Bytes::from(sanitized))
-                }),
-                protected,
-                *max_bytes,
-            ))
+            if sanitized.len() > *max_bytes {
+                anyhow::bail!("sanitized JSON exceeds its configured limit");
+            }
+            Body::from(sanitized)
         }
     };
 
+    // Mediation itself also consumes the operation budget, not only upstream reads.
+    response_body = Body::from_stream(guard_stream(
+        response_body.into_data_stream(),
+        policy.response.max_bytes,
+        Duration::from_secs(policy.response.max_duration_seconds).saturating_sub(started.elapsed()),
+        Duration::from_secs(policy.response.idle_timeout_seconds),
+    ));
     if let Some(permit) = receipt_permit {
         let receipt = DataPlaneReceipt {
             realm: state.config.realm.id.clone(),

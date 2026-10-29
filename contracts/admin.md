@@ -55,3 +55,9 @@ part of unlock. Telegram starts after unlock and has no environment-token input.
 Lock discards the token snapshot and cancels polling and pending decisions;
 restart starts locked without a Telegram notification. Channel outages retry
 without taking down the owner HTTPS listener.
+
+Lock invalidates unlock requests from before the lock, including incomplete
+uploads and queued decryption jobs. Logout revokes the session and invalidates
+pending unlocks but retains an already unlocked snapshot. Registration checks
+its bound session again at commit; logout or expiry during upload cannot enroll
+a recovery passkey.

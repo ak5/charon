@@ -173,3 +173,8 @@ Neither probe verifies Telegram delivery, isolation, or client trust. Run the re
 TLS fixture suite (`mise exec -- cargo test gateway --lib`) and the deployment
 verification procedure in [`docs/hermes-gateway.md`](../docs/hermes-gateway.md).
 Never remove an Infra convergence guard based on generic liveness.
+
+Response mediation, including credential scanning, counts against the remaining
+operation and idle deadlines. Long nearly matching bodies yield cooperatively
+so timeout and cancellation can interrupt scanning. A journal is opened by only
+one writer at a time; a second process using that journal fails startup.

@@ -345,3 +345,39 @@ appends roll back; rollback failure makes the journal unavailable until restart.
 Recovery truncates only an unterminated final append and rejects complete corrupt
 records. The local hash chain still requires a trusted external digest to detect
 a malicious rewrite or suffix removal.
+
+## Concurrent revocation and resource bounds
+
+Unlock captures the vault generation before reading its body. Lock invalidates
+that generation; logout also cancels pending unlocks without discarding an
+already unlocked snapshot. Blocking workers recheck session validity before
+decryption. Recovery-passkey enrollment rechecks the bound session after body
+arrival, under the same lock used for session revocation and registration commit.
+
+Rejected manifest replays cannot overwrite a retained nonce's expiry. The
+per-process cache holds at most 16384 unexpired nonces and denies new admissions
+at capacity. Entries remain protected for their original window plus clock skew.
+
+Both receipt implementations hold an exclusive OS lock for their journal inode
+through replay and writing. Storage must support these locks. An operator must
+not replace or delete a journal beneath an active writer; locks do not protect
+against an administrator rewriting storage. Hermes additionally bounds recovery
+lines, concurrent connections, absolute socket-read time and retained admission
+state, as specified in the tool-integration contract. Malformed or duplicate JSON
+fields fail closed rather than raising an unhandled worker exception.
+
+Response scanning yields cooperatively on long almost-matching input. Final
+mediation is itself covered by the remaining operation and idle deadlines;
+checking only upstream read time would not bound sanitizer work. Header and
+body redaction remain known-secret matching, not proof against every encoding.
+
+Structured JSON sanitation operates on decoded values before serialization,
+including numeric credential echoes and protected field names. It does not
+insert unquoted replacement markers into JSON syntax. The final mediated stream
+has its own byte bound as well as deadlines, so replacement expansion cannot
+bypass the aggregate output limit.
+
+Hermes pre/post-hook correlation includes session, tool, call ID and argument
+digest. A call ID reused across sessions cannot attach another call's outcome
+to an admitted operation. Receipts remain workload-reported evidence, not
+independent proof of execution.

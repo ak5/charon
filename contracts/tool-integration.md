@@ -11,7 +11,12 @@ or secret reference.
 
 Each Unix-socket connection carries one UTF-8 JSON object followed by `LF` and
 one response object followed by `LF`. A message is at most 64 KiB. Trailing
-data, malformed JSON, unknown fields, and timeouts fail closed.
+data received with the frame, malformed JSON, duplicate fields, unknown fields,
+and timeouts fail closed. The client timeout is an absolute monotonic deadline;
+trickled bytes do not renew it. The service allows at most 32 concurrent
+connections, reads each request within five seconds, and holds at most 4096
+unexpired operation IDs and 4096 pending receipt authorizations. Capacity
+exhaustion denies new admission without evicting active records.
 
 An admission request is:
 
@@ -69,7 +74,10 @@ JSON encoding. Readers must validate the complete chain before trusting its
 continuity. The service acknowledges only after the complete line and parent
 directory are synced. Failed appends are rolled back; a rollback failure leaves
 the journal unavailable. Startup discards an unterminated final line and rejects
-complete corrupt records.
+complete corrupt records. Each journal holds an exclusive OS file lock from
+recovery until close; a second writer fails startup. Recovery bounds each line
+to 64 KiB and validates the receipt's closed shape. An irrecoverable append
+failure makes readiness unavailable and denies new admissions until restart.
 
 The chain is tamper-evident only relative to a trusted prior digest. It is not a
 signature or proof against compromise of the journal host.
@@ -85,3 +93,7 @@ signature or proof against compromise of the journal host.
   already completed tool call.
 - Charon continues to require a valid single-use manifest and independently
   enforce exact destination, method, and path policy.
+
+The workload adapter correlates its pre/post hooks by session, tool name,
+tool-call ID and argument digest. Reusing a call ID in another session cannot
+swap the two operation receipts.

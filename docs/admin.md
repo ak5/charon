@@ -54,8 +54,11 @@ passkeys. Capacity is rechecked when ceremonies finish.
 
 Existing public registrations survive restart; the decrypted snapshot and admin
 sessions do not. Sign in and enter the master password after every restart.
-Explicit lock drops the mapped values and cancels any in-flight unlock commit.
-Signing out revokes that browser session; it does not lock the vault.
+Explicit lock drops the mapped values and cancels any in-flight unlock commit,
+including requests still uploading their body or waiting for a worker. Signing
+out revokes that browser session and cancels pending unlocks without locking an
+already unlocked vault. Recovery-passkey enrollment rechecks session validity
+after reading the request body.
 Lock denies future lookups; requests that already obtained a credential may
 finish within their configured operation bounds. A failed unlock does not replace an already unlocked snapshot. To load an updated KDBX,
 lock and unlock again. Policy mapping changes require a configuration restart.

@@ -106,13 +106,15 @@ impl ReceiptJournal {
     /// Returns an error before listener bind when paths cannot be opened.
     pub fn start(config: &ReceiptConfig) -> Result<Self> {
         let journal_existed = config.journal_path.exists();
-        drop(open_private_append(&config.journal_path)?);
+        let journal = open_private_append(&config.journal_path)?;
+        journal
+            .try_lock()
+            .context("receipt journal already in use")?;
         ensure_private_file(&config.journal_path, "receipt journal")?;
         if !journal_existed {
             sync_parent(&config.journal_path)?;
         }
         let previous = recover_chain(&config.journal_path, &config.state_path)?;
-        let journal = open_private_append(&config.journal_path)?;
         let (sender, receiver) = mpsc::channel(config.queue_capacity);
         let healthy = Arc::new(AtomicBool::new(true));
         let worker_health = Arc::clone(&healthy);
@@ -433,6 +435,20 @@ mod tests {
         open_private_append, recover_chain, write_state,
     };
     use crate::config::ReceiptConfig;
+
+    #[tokio::test]
+    async fn journal_rejects_a_second_writer() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = ReceiptConfig {
+            journal_path: directory.path().join("receipts.jsonl"),
+            state_path: directory.path().join("chain"),
+            queue_capacity: 2,
+        };
+        let first = ReceiptJournal::start(&config)?;
+        assert!(ReceiptJournal::start(&config).is_err());
+        assert!(first.is_healthy());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn journal_contains_only_the_closed_metadata_shape() {

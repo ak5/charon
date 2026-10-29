@@ -875,6 +875,12 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
         Duration::from_secs(route.idle_timeout_seconds),
     );
     let sanitized = redact_text_stream(guarded, protected, route.max_response_bytes);
+    let sanitized = guard_stream(
+        sanitized,
+        route.max_response_bytes,
+        Duration::from_secs(route.max_duration_seconds).saturating_sub(started.elapsed()),
+        Duration::from_secs(route.idle_timeout_seconds),
+    );
     // Path is a policy identifier, never an untrusted URL or token-bearing path.
     let receipt = DataPlaneReceipt {
         realm: state.config.realm.id.clone(),

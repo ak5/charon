@@ -165,3 +165,14 @@ contract versions fail closed. A future change that alters reference parsing,
 authorization meaning, hydration behavior, or streaming semantics requires an
 explicit contract-version review. Operators roll out a new binary together
 with one complete validated policy; they do not mix schema generations.
+
+Response mediation, including credential scanning, counts against the remaining
+operation and idle deadlines. Long nearly matching bodies yield cooperatively
+so timeout and cancellation can interrupt scanning. A journal is opened by only
+one writer at a time; a second process using that journal fails startup.
+
+Structured JSON modes redact decoded values before re-encoding. Matching numeric
+values become a JSON string marker; equivalent numeric representations are
+matched conservatively. Fields whose names contain protected values are removed.
+SSE metadata or control markers containing protected material deny the event.
+Final emitted bytes also remain within the aggregate response limit.

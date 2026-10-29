@@ -93,11 +93,28 @@ impl KeePassStore {
     /// # Errors
     /// Fails closed for invalid keys, inputs, or mapped passwords. A concurrent lock cancels it.
     pub fn unlock(&self, password: SecretString) -> StoreResult<()> {
+        self.unlock_at_generation(password, self.unlock_generation())
+    }
+    pub(crate) fn unlock_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+    pub(crate) fn cancel_unlocks(&self) -> StoreResult<()> {
+        let _values = self.values.lock().map_err(|_| StoreError::Unavailable)?;
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    pub(crate) fn unlock_at_generation(
+        &self,
+        password: SecretString,
+        generation: u64,
+    ) -> StoreResult<()> {
         let _gate = self
             .unlock_gate
             .try_lock()
             .map_err(|_| StoreError::Unavailable)?;
-        let generation = self.generation.load(Ordering::SeqCst);
+        if generation != self.unlock_generation() {
+            return Err(StoreError::Locked);
+        }
         if password.expose_secret().is_empty() || password.expose_secret().len() > 4096 {
             return Err(StoreError::UnlockFailed);
         }
