@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "charon-hermes"
-version = "0.2.1"
+version = "0.2.2"
 description = "Fail-closed Charon permissions and tool receipts for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11"

@@ -16,8 +16,10 @@ from charon_hermes.compatibility import (
     HERMES_VERSION, policy_document,
 )
 from charon_hermes.plugin import register
+from charon_hermes.external_tools import HERDR_OBSERVATION
 
 REVIEWED_CLASSIFICATION_DIGEST = "9af1c6e03f149e554ab7cc2fec992ce1a10199873cc5a3ea4f32dae5389c0dc9"
+REVIEWED_EXTERNAL_DIGEST = "b9c8b2a84d71b6fcf3a8c7a9e93f0ea3a3a0040553ef00fda09f75e17a6b2ffa"
 
 
 def _core_tools(source: Path) -> list[str]:
@@ -34,6 +36,19 @@ def _core_tools(source: Path) -> list[str]:
 
 
 class CompatibilityTests(unittest.TestCase):
+    def test_external_catalog_is_separate_exact_and_reviewed(self) -> None:
+        expected = {
+            f"mcp__herdr_{host}__{method}"
+            for host in ("mac", "mule", "dev")
+            for method in ("ping", "agent_list", "agent_get", "agent_read", "agent_wait")
+        }
+        self.assertEqual(set(HERDR_OBSERVATION), expected)
+        self.assertEqual(set(HERDR_OBSERVATION.values()), {"read"})
+        self.assertFalse(set(HERDR_OBSERVATION) & set(CLASSIFICATIONS))
+        self.assertFalse(set(HERDR_OBSERVATION) & set(DEPLOYMENT_TOOLS))
+        encoded = json.dumps(HERDR_OBSERVATION, sort_keys=True, separators=(",", ":")).encode()
+        self.assertEqual(hashlib.sha256(encoded).hexdigest(), REVIEWED_EXTERNAL_DIGEST)
+
     def test_classification_changes_require_review(self) -> None:
         encoded = json.dumps(CLASSIFICATIONS, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), REVIEWED_CLASSIFICATION_DIGEST)

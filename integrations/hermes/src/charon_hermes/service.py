@@ -18,8 +18,7 @@ from typing import Any
 import uuid
 
 from .canonical import canonical_json, sha256_digest
-from .compatibility import CLASSIFICATIONS as REVIEWED_CLASSIFICATIONS
-from .compatibility import HERMES_COMMIT, HERMES_VERSION, PROFILE
+from .compatibility import HERMES_COMMIT, HERMES_VERSION, PROFILE, classify_tool
 from .protocol import MAX_MESSAGE, ProtocolError, receive_message
 
 CLASSIFICATIONS = frozenset({"read", "mutation", "destructive", "secret-sensitive", "unknown"})
@@ -156,7 +155,7 @@ class Policy:
                 or not name
                 or any(symbol in name for symbol in "*?[]")
                 or classification not in CLASSIFICATIONS - {"unknown"}
-                or REVIEWED_CLASSIFICATIONS.get(name) != classification
+                or classify_tool(name) != classification
             ):
                 raise ValueError("tool policy is invalid")
             if name in self._tools:

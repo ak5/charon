@@ -125,6 +125,13 @@ decides which registry-gated tools exist; Charon policy can only narrow that
 set. Hermes's dangerous-command approval remains a separate later guard for an
 admitted terminal call.
 
+The separate reviewed Herdr observation catalog permits policy opt-in for 15
+exact MCP names on Mac, mule and dev. Infra binds those names to fixed-host,
+forced-command adapters that expose only ping/list/get/read/wait, with read and
+wait bounds. Charon classifies the names and enforces exact policy membership;
+it neither validates remote arguments nor treats MCP annotations as authority.
+The core inventory and default policy remain unchanged.
+
 After an admitted call finishes, the adapter emits a compact execution receipt
 asynchronously. The receipt excludes raw arguments and raw output. It is audit
 evidence, not authorization and not proof that a destination's semantic state

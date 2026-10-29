@@ -87,7 +87,12 @@ signature or proof against compromise of the journal host.
 - Admission service absence, ambiguity, invalid responses, and operation replay
   deny execution.
 - Policies use exact tool names and explicit classifications. They reject
-  wildcards.
+  wildcards. The Hermes plugin and policy loader share one classifier over the
+  reviewed core inventory and separate external-tool catalog. External entries
+  require explicit policy opt-in; the default core policy and version 2 schema
+  are unchanged. Model arguments and MCP annotations cannot grant classification
+  or admission. Herdr observation names rely on the dedicated fixed-host,
+  read-only adapters described in the integration's deployment contract.
 - Raw arguments and raw tool output never cross the integration protocol.
 - Receipt export is bounded and asynchronous; it cannot change the result of an
   already completed tool call.

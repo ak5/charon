@@ -64,6 +64,13 @@ They are classified but omitted from the recommended policy.
 
 ## Upgrade contract
 
+The optional [Herdr observation catalog](../integrations/hermes/README.md#optional-herdr-observation-catalog)
+is reviewed separately from these 61 core names. Its 15 exact MCP names cover
+the five read methods on the fixed Mac, mule and dev adapters. They require
+explicit policy opt-in and are absent from the default recommended policy.
+Both plugin classification and policy validation use the shared classifier;
+external names never enter the upstream core-inventory equality check.
+
 For a Hermes upgrade, update the immutable tag and commit, run the compatibility
 test against that exact checkout, review every added/removed/changed name and
 classification, update the reviewed digest and policy, then rerun the real
