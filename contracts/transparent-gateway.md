@@ -51,7 +51,7 @@ Basic authentication, Git smart-HTTP Basic authentication, one path component,
 one explicitly named query parameter, one RFC 6901 JSON string field, and one
 URL-encoded form field.
 
-JSON and form bodies are buffered only to the request limit because semantic
+JSON and form bodies are buffered only to the request limit within ten seconds because semantic
 mutation cannot be performed safely on arbitrary chunks. Header, path, query,
 Basic, Git, and opaque request bodies retain streaming and backpressure when
 ungated. Every Telegram-gated body is buffered within the smaller of 64 KiB and
@@ -83,10 +83,14 @@ Every service selects one mode:
   protocol-aware semantic body inspection.
 
 All modes preserve backpressure and cancellation and enforce aggregate bytes,
-total lifetime, idle time, and bounded memory. Authentication/session headers
+total lifetime, idle time, and bounded memory. The operation deadline starts
+before request buffering and includes approval waits. Buffered JSON enforces its
+smaller limit during reading, not after collecting the body. Original upstream
+Content-Length is checked against the effective limit before stripping. Authentication/session headers
 and upstream Content-Length are removed before downstream headers. Known raw
 and rendered credentials are held in secret types and registered with the
-rolling redactor. A failure after partial output stops forwarding and records
+rolling redactor, which also recognizes mixed JSON escapes and Unicode surrogate
+pairs across chunks. It never rescans its replacement markers. A failure after partial output stops forwarding and records
 an interrupted or sanitization-failed receipt; Charon does not append an
 upstream error body.
 

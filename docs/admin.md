@@ -42,8 +42,11 @@ Challenges and opaque admin sessions remain in process memory. Admin cookies are
 Secure, HttpOnly and SameSite Strict; sessions expire after ten minutes. Unlock,
 lock and registration require a valid session and the exact configured Origin.
 First enrollment requires the console code instead of a session. There is a
-global limit of 30 origin-accepted non-GET requests per 60-second window;
-repeated attempts can temporarily block the owner. Challenges are bounded to
+separate limit of 30 origin-accepted non-GET requests per 60-second window
+for authenticated and unauthenticated clients. Authenticated vault locking is
+exempt, so exhausted budgets cannot stop an existing owner session from locking.
+Unauthenticated flooding can still delay sign-in; restrict admin network access.
+JSON bodies must arrive within ten seconds. Challenges are bounded to
 32 pending ceremonies, sessions to 32 active tokens, and registrations to eight
 passkeys. Capacity is rechecked when ceremonies finish.
 

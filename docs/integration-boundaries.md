@@ -12,8 +12,6 @@ control plane. Integrations are explicit, versioned, and fail closed.
 | Signed workload | workload → Charon | HTTP forward proxy; `CONNECT` for HTTPS; signed manifest in `Proxy-Authorization` | untrusted | destination, operation, capability reference, size, redirect, replay, and expiry enforcement |
 | Transparent workload lane | Infra-routed workload → dedicated Charon listener | intercepted TCP/TLS; capability reference in one policy sink; [`transparent-gateway.md`](../contracts/transparent-gateway.md) | trusted only when isolated routing prevents spoofing and bypass | exact listener/service binding, SNI/authority agreement, capability, hydration, response mediation |
 | Identity issuer | control plane → workload → Charon | Ed25519 signed compact manifest; [`workload-claims.schema.json`](../contracts/workload-claims.schema.json) | trusted only to assert identity and capability | offline signature verification and independent concrete-operation policy |
-| Approval broker | control plane ↔ broker → identity issuer | normalized request and signed approval assertion; [`approval-broker.openapi.yaml`](../contracts/approval-broker.openapi.yaml) | trusted control-plane authorization component | outside Charon; cannot select destinations, secrets, or widen local policy |
-| External broker approval channel | broker ↔ Telegram/human | [`ApprovalChannel`](../contracts/approval-channel.md) presentation and opaque callback contract | trusted only for delivery and numeric actor/chat authentication | outside Charon; no decision, rule, assertion, or credential authority |
 | Operator configuration | operator → Charon | deny-unknown-fields TOML; example in [`examples/charon.toml`](../examples/charon.toml) | trusted administrative input | validation before listener bind |
 | KeePass store | Charon → private read-only KDBX | exact policy-owned entry UUID; `SecretString` out, data-free `StoreError` | trusted operator database and parser | locked boot, mapped protected Password fields, explicit lock, non-disclosure |
 | Owner admin | owner browser → separate Charon HTTPS listener | console-code first enrollment; origin-bound passkeys; short-lived opaque sessions | trusted owner and browser authenticator | public registrations, origin checks, bounded challenges, authenticated unlock/lock |
@@ -61,29 +59,6 @@ Charon keeps only the public key and does not call the issuer. Issuer
 availability therefore affects creation of new manifests, not verification of
 an already issued request.
 
-## Human approval contract
-
-When an operation requires human approval, the control plane submits a
-schema-validated normalized request to the external approval broker. The broker
-either atomically matches one bounded reusable rule or obtains a terminal human
-decision through an `ApprovalChannel`, then returns a short-lived signed
-approval assertion to the identity issuer.
-
-The issuer verifies and consumes that assertion, rechecks the current
-tenant/persona/workspace/lease tuple and policy generation, and mints one fresh
-single-use Charon manifest. The data plane never calls the external broker or receives its rules and
-assertions. Its optional local Telegram gate uses a dedicated operator-only KeePass bot token
-and pending callback handles, and narrows the configured network policy. Caller-owned Telegram network requests are a
-separate exclusive forwarding route. ADR 0005 and the approval artifacts in
-[`contracts/`](../contracts/) define this separate control-plane boundary.
-
-Resident-agent semantic approval uses the same grant engine but terminates at a
-local admission decision; it cannot manufacture a capability or skip Charon's
-independent network authorization. Session coding harnesses keep their native
-inline approval systems. The external broker's Telegram adapter and broker are separate optional
-processes joined by a protected Unix socket: the broker has durable state and
-the assertion key but no Telegram token, while the adapter has the token and
-immutable private-user binding but no rule or assertion authority.
 
 ## KeePass and owner administration
 

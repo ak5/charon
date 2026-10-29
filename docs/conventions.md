@@ -50,7 +50,7 @@ command, not a branch.
 | Configuration schema or integration responsibility | `docs/integration-boundaries.md` and examples |
 | Trust boundary, credential flow, authorization, redirects, or logging | `docs/threat-model.md` |
 | Operator deployment behavior | `docs/deployment.md` |
-| Approval broker behavior | `contracts/approval-*` and `docs/approval-broker-operations.md` |
+| Request approvals | `docs/admin.md` and `docs/adr/0009-local-telegram-allow-once.md` |
 | Architectural decision | `docs/adr/` |
 | Contributor, branch, merge, or release policy | `CONTRIBUTING.md` and this document |
 | Commands or tool versions | `mise.toml`, `README.md`, and this document |

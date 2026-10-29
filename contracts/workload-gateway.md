@@ -130,7 +130,8 @@ egress; nothing is silently omitted or truncated. See
 SSE/model responses stream through rolling byte redaction, without semantic
 prompt/body inspection. Binary downloads retain their bytes on secretless
 routes. Credential routes redact known raw/rendered credentials and URL/base64
-encodings even across chunk boundaries. This can alter an opaque payload that
+encodings and decoded JSON character escapes, including Unicode surrogate
+pairs, even across chunk boundaries. Replacement text is never rescanned. This can alter an opaque payload that
 contains a brokered credential; it is intentional fail-safe mediation.
 
 HTTP/1.1 keepalive and HTTP/2 multiplexing are supported downstream; reqwest

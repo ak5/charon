@@ -24,7 +24,8 @@ An admission request is:
 
 The operation conforms to `tool-operation.schema.json`. The service returns a
 `tool-admission-decision.schema.json` object. An allow decision is short-lived,
-single-use, and bound server-side to one operation ID. It is not a Charon
+single-use, and bound server-side to the complete operation identity. Admission
+expires after five minutes. It is not a Charon
 manifest.
 
 A receipt request is:
@@ -37,7 +38,12 @@ A receipt request is:
 ```
 
 The receipt conforms to `tool-receipt.schema.json`. The service accepts it only
-when its authorization ID and operation ID match one unconsumed admission.
+when its authorization ID matches one unconsumed admission and its version,
+operation ID, integration, session ID, tool call ID, tool name, classification,
+argument digest and optional task ID equal the admitted values. Receipt
+acceptance expires one day after admission, checked even if no later admission
+occurs. This separate window lets a tool finish after the admission response
+expires; it does not extend permission to start a call.
 
 A readiness request is the closed object `{"kind":"health"}`. It returns only
 protocol version, readiness status, pinned workload version/commit, and profile.
@@ -60,7 +66,10 @@ digest can disclose a low-entropy result through comparison.
 The local service wraps each receipt with `chain_previous` and `chain_digest`.
 `chain_digest` covers the receipt and previous digest using the same canonical
 JSON encoding. Readers must validate the complete chain before trusting its
-continuity.
+continuity. The service acknowledges only after the complete line and parent
+directory are synced. Failed appends are rolled back; a rollback failure leaves
+the journal unavailable. Startup discards an unterminated final line and rejects
+complete corrupt records.
 
 The chain is tamper-evident only relative to a trusted prior digest. It is not a
 signature or proof against compromise of the journal host.

@@ -10,6 +10,7 @@ import tempfile
 from threading import Thread
 import time
 import unittest
+from unittest.mock import patch
 
 from charon_hermes.admission import AdmissionClient
 from charon_hermes.config import Settings
@@ -100,7 +101,105 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(policy.decide(operation.value), (False, "tool-not-allowed"))
 
 
+class JournalTests(unittest.TestCase):
+    def receipt(self) -> dict:
+        operation = Operation.create("read_file", {}, "task", "call", "session")
+        return receipt_for(operation, "authorization:1234567890abcdef", "", 1, False)
+
+    def test_short_writes_are_completed_and_synced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "state"
+            journal = Journal(directory)
+            original = os.write
+            with patch("charon_hermes.service.os.write", side_effect=lambda fd, data: original(fd, data[:7])) as write, patch("charon_hermes.service.os.fsync", wraps=os.fsync) as sync:
+                journal.append(self.receipt())
+                self.assertGreater(write.call_count, 1)
+                self.assertGreaterEqual(sync.call_count, 2)
+            self.assertEqual(Journal(directory)._previous, journal._previous)
+
+    def test_partial_write_failure_rolls_back_and_allows_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "state"
+            journal = Journal(directory)
+            receipt = self.receipt()
+            original = os.write
+            calls = 0
+            def fail_after_partial(fd, data):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return original(fd, data[:7])
+                raise OSError("synthetic disk failure")
+            with patch("charon_hermes.service.os.write", side_effect=fail_after_partial):
+                with self.assertRaises(OSError):
+                    journal.append(receipt)
+            self.assertEqual(journal._path.read_bytes(), b"")
+            journal.append(receipt)
+            self.assertEqual(Journal(directory)._previous, journal._previous)
+
+    def test_sync_failure_is_not_acknowledged(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            journal = Journal(Path(temporary) / "state")
+            with patch("charon_hermes.service.os.fsync", side_effect=OSError("synthetic sync failure")):
+                with self.assertRaises(OSError):
+                    journal.append(self.receipt())
+            with self.assertRaises(OSError):
+                journal.append(self.receipt())
+
+    def test_recovery_discards_only_an_unterminated_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "state"
+            journal = Journal(directory)
+            journal.append(self.receipt())
+            valid = journal._path.read_bytes()
+            with journal._path.open("ab") as handle:
+                handle.write(b'{"receipt":')
+            recovered = Journal(directory)
+            self.assertEqual(recovered._previous, journal._previous)
+            self.assertEqual(journal._path.read_bytes(), valid)
+            with journal._path.open("ab") as handle:
+                handle.write(b"corrupt complete record\n")
+            with self.assertRaises(ValueError):
+                Journal(directory)
+
+
 class IntegrationTests(unittest.TestCase):
+    def test_receipt_is_bound_to_complete_admitted_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ServiceFixture(Path(temporary))
+            try:
+                operation = Operation.create("read_file", {}, "task", "call", "session")
+                admission = fixture.server.admit(operation.value)
+                receipt = receipt_for(operation, admission["authorization_id"], "", 1, False)
+                for key, value in {
+                    "operation_id": "op:other", "session_id": "other", "tool_call_id": "other",
+                    "tool_name": "write_file", "classification": "mutation",
+                    "arguments_digest": "sha256:" + "f" * 64, "task_id": "other",
+                }.items():
+                    with self.subTest(field=key):
+                        self.assertFalse(fixture.server.accept_receipt({**receipt, key: value}))
+                missing_task = dict(receipt)
+                missing_task.pop("task_id")
+                self.assertFalse(fixture.server.accept_receipt(missing_task))
+                self.assertTrue(fixture.server.accept_receipt(receipt))
+                self.assertFalse(fixture.server.accept_receipt(receipt))
+            finally:
+                fixture.close()
+
+    def test_receipt_expiry_is_checked_without_another_admission(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ServiceFixture(Path(temporary))
+            try:
+                operation = Operation.create("read_file", {}, "", "call", "session")
+                admission = fixture.server.admit(operation.value)
+                receipt = receipt_for(operation, admission["authorization_id"], "", 1, False)
+                self.assertFalse(fixture.server.accept_receipt({**receipt, "task_id": "extra"}))
+                expiry = fixture.server._authorizations[admission["authorization_id"]][1]
+                with patch("charon_hermes.service.time.time", return_value=expiry):
+                    self.assertFalse(fixture.server.accept_receipt(receipt))
+            finally:
+                fixture.close()
+
     def test_unavailable_service_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             settings = Settings(Path(temporary) / "missing.sock")

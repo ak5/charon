@@ -14,15 +14,6 @@
 - `workload-claims.schema.json` validates the JSON payload signed by a workload
   identity issuer. The compact wire form remains
   `base64url(payload).base64url(ed25519_signature)`.
-- `approval-request.schema.json`, `approval-decision.schema.json`,
-  `approval-rule.schema.json`, and `approval-assertion.schema.json` define the
-  closed human-approval data model.
-- `approval-canonicalization.md` specifies RFC 8785 canonicalization, SHA-256
-  binding, and the broker-to-issuer signed assertion.
-- `approval-channel.md` defines the channel-neutral presentation/callback
-  adapter implemented first by Telegram.
-- `approval-broker.openapi.yaml` describes the mutually authenticated external
-  broker API. It is not a Charon runtime endpoint.
 - Charon's operator TOML is defined by the Rust configuration types and the
   validated example in `examples/charon.toml`. A generated configuration schema
   is intentionally deferred until it can be produced from those types rather
@@ -45,14 +36,8 @@ transport authentication, idempotency, ownership-marker checks, filesystem
 permissions, and network policy remain operator responsibilities documented in
 [`docs/persona-realm-contract.md`](../docs/persona-realm-contract.md).
 
-The external broker approval contracts are implemented outside the data plane.
-Charon's local allow-once Telegram gate is documented in
-[owner operations](../docs/admin.md) and does not implement reusable broker rules. Their trust boundaries,
-grant semantics, non-reusable operations, outage behavior, and rejected
-alternatives are recorded in
-[`ADR 0005`](../docs/adr/0005-human-approval-broker.md).
-Provisioning, recovery, rotation, revocation, and emergency procedures are in
-the [`approval broker operator runbook`](../docs/approval-broker-operations.md).
+Charon's built-in allow-once Telegram gate is documented in
+[owner operations](../docs/admin.md) and [ADR 0009](../docs/adr/0009-local-telegram-allow-once.md).
 
 Tool admission and receipt contracts are also implemented outside Charon.
 Their first adapter is [`charon-hermes`](../integrations/hermes/README.md).

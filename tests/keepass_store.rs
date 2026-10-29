@@ -21,6 +21,12 @@ struct Fixture {
     directory: tempfile::TempDir,
     config: KeePassConfig,
 }
+
+#[test]
+fn keepass_chacha_key_state_is_zeroized_on_drop() {
+    fn requires_zeroize<T: zeroize::ZeroizeOnDrop>() {}
+    requires_zeroize::<chacha20::ChaChaCore<chacha20::R20, chacha20::variants::Ietf>>();
+}
 impl Fixture {
     fn new(protected: bool, key_file: bool) -> Result<Self> {
         let directory = tempfile::tempdir()?;

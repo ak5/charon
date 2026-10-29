@@ -105,6 +105,7 @@ struct Runtime {
     sessions: HashMap<[u8; 32], Instant>,
     rate_started: Instant,
     rate_count: u32,
+    owner_rate_count: u32,
 }
 /// Trusted admin state holds `WebAuthn` challenges server-side, never in browser tokens.
 pub struct Admin {
@@ -214,6 +215,7 @@ impl Admin {
                     sessions: HashMap::new(),
                     rate_started: Instant::now(),
                     rate_count: 0,
+                    owner_rate_count: 0,
                 }),
             }),
             code,
@@ -357,7 +359,11 @@ async fn body<T: DeserializeOwned>(request: Request) -> Result<T> {
             .is_some_and(|v| v == "application/json"),
         "JSON required"
     );
-    let bytes = to_bytes(request.into_body(), 16384).await?;
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(10),
+        to_bytes(request.into_body(), 16384),
+    )
+    .await??;
     // Network frames can share Hyper's read buffer; do not reject valid requests.
     // Our owned parsing copy is zeroized, independently of transport buffers.
     let mut owned = zeroize::Zeroizing::new(bytes.to_vec());
@@ -376,15 +382,24 @@ async fn protect(State(admin): State<Arc<Admin>>, request: Request, next: Next) 
         {
             return secure_response(denied());
         }
+        let authenticated = admin.session(request.headers()).is_some();
+        // A network client must never consume the owner's emergency lock budget.
+        let emergency_lock = authenticated && request.uri().path() == "/api/lock";
         let Ok(mut runtime) = admin.runtime.lock() else {
             return secure_response(failed());
         };
         if runtime.rate_started.elapsed() >= Duration::from_secs(60) {
             runtime.rate_started = Instant::now();
             runtime.rate_count = 0;
+            runtime.owner_rate_count = 0;
         }
-        runtime.rate_count += 1;
-        if runtime.rate_count > 30 {
+        let counter = if authenticated {
+            &mut runtime.owner_rate_count
+        } else {
+            &mut runtime.rate_count
+        };
+        *counter = counter.saturating_add(1);
+        if *counter > 30 && !emergency_lock {
             return secure_response(
                 (StatusCode::TOO_MANY_REQUESTS, "Try again later").into_response(),
             );
@@ -854,6 +869,75 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("empty cookie"))?
             .into())
     }
+    #[tokio::test]
+    async fn unauthenticated_rate_limit_cannot_block_owner_lock() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let admin = &fixture.admin;
+        admin
+            .runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+            .sessions
+            .insert(digest("synthetic-session"), Instant::now() + SESSION_TTL);
+        let session = format!("{COOKIE}=synthetic-session");
+        for _ in 0..31 {
+            post(admin, "lock", json!({}), None, Some(&admin.config.origin)).await?;
+        }
+        assert_eq!(
+            post(admin, "lock", json!({}), None, Some(&admin.config.origin))
+                .await?
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            post(
+                admin,
+                "lock",
+                json!({}),
+                Some(&session),
+                Some(&admin.config.origin)
+            )
+            .await?
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        admin
+            .runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+            .owner_rate_count = u32::MAX;
+        assert_eq!(
+            post(
+                admin,
+                "lock",
+                json!({}),
+                Some(&session),
+                Some(&admin.config.origin)
+            )
+            .await?
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            post(admin, "lock", json!({}), Some(&session), None)
+                .await?
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_admin_body_times_out() -> Result<()> {
+        let request = http::Request::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from_stream(futures_util::stream::pending::<
+                std::io::Result<axum::body::Bytes>,
+            >()))?;
+        assert!(super::body::<Value>(request).await.is_err());
+        Ok(())
+    }
+
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn passkey_enrollment_login_unlock_recovery_and_restart() -> Result<()> {

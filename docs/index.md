@@ -14,8 +14,6 @@ Start with the document that owns the question you are trying to answer.
   CONNECT, secretless forwarding and typed credential routes.
 - [Transparent gateway contract](../contracts/transparent-gateway.md):
   capability references, typed hydration, streaming mediation, and routing.
-- [Approval broker operations](approval-broker-operations.md): approval-broker
-  integration and operational behavior.
 - [Vertical integration example](../integrations/vertical/README.md): isolated
   end-to-end demonstration.
 - [Hermes Agent integration](../integrations/hermes/README.md): fail-closed tool
@@ -50,3 +48,4 @@ Start with the document that owns the question you are trying to answer.
 - [Exclusive gateway implementation review](security-review-workload-gateway.md):
   reviewed boundaries, regression evidence and deployment limitations.
 - [KeePass/admin verification](security-verification-keepass-admin.md): implementation evidence and deployment verification limits.
+- [Response and receipt security review](security-review-response-and-receipts.md): audit fixes, regression evidence, and remaining deployment boundaries.

@@ -51,7 +51,7 @@ pub fn sanitize_headers(
         .iter()
         .map(|name| HeaderName::from_static(name))
         .collect::<HashSet<_>>();
-    if let Some(encoding) = headers.get(http::header::CONTENT_ENCODING) {
+    for encoding in headers.get_all(http::header::CONTENT_ENCODING) {
         let identity = encoding
             .to_str()
             .is_ok_and(|value| value.eq_ignore_ascii_case("identity"));
@@ -81,7 +81,7 @@ pub fn sanitize_headers(
 
 /// Stream text through a rolling redactor with backpressure and bounded state.
 ///
-/// The sanitizer retains at most `longest protected value - 1` uncommitted
+/// The sanitizer retains at most `6 * longest protected value + 12` uncommitted
 /// bytes plus the current upstream chunk. Cancellation drops and zeroizes the
 /// retained overlap. Stream errors expose only a fixed local message.
 pub fn redact_text_stream<S, E>(
@@ -107,7 +107,7 @@ where
                 if state.pending.is_empty() {
                     return None;
                 }
-                let bytes = Bytes::from(std::mem::take(&mut state.pending));
+                let bytes = Bytes::from(redact_prefix(&mut state.pending, &state.protected, true));
                 return Some((Ok(bytes), state));
             }
             match state.upstream.next().await {
@@ -124,18 +124,9 @@ where
                         }
                     };
                     state.pending.extend_from_slice(&chunk);
-                    redact_all(&mut state.pending, &state.protected);
-                    let overlap = state
-                        .protected
-                        .iter()
-                        .map(|value| value.expose_secret().len().saturating_sub(1))
-                        .max()
-                        .unwrap_or(0);
-                    if state.pending.len() > overlap {
-                        let emit = state.pending.len() - overlap;
-                        let tail = state.pending.split_off(emit);
-                        let bytes = Bytes::from(std::mem::replace(&mut state.pending, tail));
-                        return Some((Ok(bytes), state));
+                    let output = redact_prefix(&mut state.pending, &state.protected, false);
+                    if !output.is_empty() {
+                        return Some((Ok(Bytes::from(output)), state));
                     }
                 }
                 Some(Err(_)) => {
@@ -479,16 +470,102 @@ impl<S> Drop for RedactionState<S> {
     }
 }
 
-fn redact_all(buffer: &mut Vec<u8>, protected: &[SecretString]) {
-    for value in protected {
-        let needle = value.expose_secret().as_bytes();
-        if needle.is_empty() {
-            continue;
+fn redact_prefix(buffer: &mut Vec<u8>, protected: &[SecretString], finished: bool) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut offset = 0;
+    while offset < buffer.len() {
+        let input = &buffer[offset..];
+        let mut partial = false;
+        let matched = protected
+            .iter()
+            .filter_map(|value| {
+                let secret = value.expose_secret();
+                if secret.is_empty() {
+                    return None;
+                }
+                partial |= input.len() < secret.len() && secret.as_bytes().starts_with(input);
+                let raw = input.starts_with(secret.as_bytes()).then_some(secret.len());
+                let decoded = match json_secret_length(input, secret) {
+                    Ok(length) => Some(length),
+                    Err(incomplete) => {
+                        partial |= incomplete;
+                        None
+                    }
+                };
+                raw.into_iter().chain(decoded).max()
+            })
+            .max();
+        if partial && !finished {
+            break;
         }
-        while let Some(index) = find_bytes(buffer, needle) {
-            buffer.splice(index..index + needle.len(), REDACTION.iter().copied());
+        if let Some(length) = matched {
+            output.extend_from_slice(REDACTION);
+            offset += length;
+        } else {
+            output.push(buffer[offset]);
+            offset += 1;
         }
     }
+    buffer[..offset].zeroize();
+    buffer.drain(..offset);
+    output
+}
+
+// Decode JSON characters during matching, including mixed escapes and surrogate pairs.
+// This also covers JSON embedded in SSE/text without buffering an entire document.
+fn json_secret_length(input: &[u8], secret: &str) -> Result<usize, bool> {
+    let mut offset = 0;
+    for expected in secret.chars() {
+        let remaining = input.get(offset..).ok_or(true)?;
+        if remaining.first() == Some(&b'\\') {
+            let (character, length) = json_escape(remaining).ok_or(remaining.len() < 12)?;
+            if character != expected {
+                return Err(false);
+            }
+            offset += length;
+        } else {
+            let mut encoded = [0; 4];
+            let bytes = expected.encode_utf8(&mut encoded).as_bytes();
+            if !remaining.starts_with(bytes) {
+                return Err(bytes.starts_with(remaining));
+            }
+            offset += bytes.len();
+        }
+    }
+    Ok(offset)
+}
+
+fn json_escape(input: &[u8]) -> Option<(char, usize)> {
+    let character = match *input.get(1)? {
+        b'"' => '"',
+        b'\\' => '\\',
+        b'/' => '/',
+        b'b' => '\u{8}',
+        b'f' => '\u{c}',
+        b'n' => '\n',
+        b'r' => '\r',
+        b't' => '\t',
+        b'u' => {
+            let hex = |bytes: &[u8]| u32::from_str_radix(std::str::from_utf8(bytes).ok()?, 16).ok();
+            let first = hex(input.get(2..6)?)?;
+            if (0xd800..=0xdbff).contains(&first) {
+                if input.get(6..8)? != b"\\u" {
+                    return None;
+                }
+                let second = hex(input.get(8..12)?)?;
+                if !(0xdc00..=0xdfff).contains(&second) {
+                    return None;
+                }
+                return Some((
+                    char::from_u32(0x10000 + ((first - 0xd800) << 10) + second - 0xdc00)?,
+                    12,
+                ));
+            }
+            return Some((char::from_u32(first)?, 6));
+        }
+        _ => return None,
+    };
+    Some((character, 2))
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -497,10 +574,14 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|candidate| candidate == needle)
 }
 
-fn contains_protected(value: &[u8], protected: &[SecretString]) -> bool {
+pub(crate) fn contains_protected(value: &[u8], protected: &[SecretString]) -> bool {
     protected.iter().any(|secret| {
         let needle = secret.expose_secret().as_bytes();
-        !needle.is_empty() && find_bytes(value, needle).is_some()
+        !needle.is_empty()
+            && (find_bytes(value, needle).is_some()
+                || (0..value.len()).any(|offset| {
+                    json_secret_length(&value[offset..], secret.expose_secret()).is_ok()
+                }))
     })
 }
 
@@ -543,6 +624,87 @@ mod tests {
             .unwrap_or_else(|error| panic!("{error}"))
             .concat();
         assert_eq!(body, b"before [REDACTED] after");
+    }
+
+    #[tokio::test]
+    async fn redacts_json_escapes_and_replacement_text_at_every_chunk_boundary() {
+        for (secret, input, expected) in [
+            ("REDACTED", "REDACTED REDACTED", "[REDACTED] [REDACTED]"),
+            (
+                "a\"bcdefgh",
+                r#"{"echo":"a\"bcdefgh"}"#,
+                r#"{"echo":"[REDACTED]"}"#,
+            ),
+            (
+                "a\"bcdefgh",
+                r#"{"a\u0022b\u0063defgh":true}"#,
+                r#"{"[REDACTED]":true}"#,
+            ),
+            (
+                "ab😀cd/é",
+                r#"data: {"echo":"\u0061b\uD83D\ude00cd\/\u00e9"}
+
+"#,
+                "data: {\"echo\":\"[REDACTED]\"}\n\n",
+            ),
+            (
+                "ab\\cd\nef",
+                r#"{"echo":"ab\\cd\nef"}"#,
+                r#"{"echo":"[REDACTED]"}"#,
+            ),
+        ] {
+            for split in 0..=input.len() {
+                let chunks = [
+                    Bytes::copy_from_slice(&input.as_bytes()[..split]),
+                    Bytes::copy_from_slice(&input.as_bytes()[split..]),
+                ];
+                let output = redact_text_stream(
+                    stream::iter(chunks.map(Ok::<_, std::io::Error>)),
+                    vec![SecretString::from(secret)],
+                    4096,
+                )
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<std::io::Result<Vec<_>>>()
+                .unwrap_or_else(|error| panic!("{error}"))
+                .concat();
+                assert_eq!(output, expected.as_bytes(), "split {split}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn redaction_does_not_rescan_replacements_or_commit_partial_matches() {
+        let input = format!(
+            "{}fixture-secret-tail{}fixture-secret",
+            "x".repeat(100),
+            "y".repeat(100)
+        );
+        let chunks = input
+            .as_bytes()
+            .chunks(1)
+            .map(|chunk| Ok::<_, std::io::Error>(Bytes::copy_from_slice(chunk)))
+            .collect::<Vec<_>>();
+        let output = redact_text_stream(
+            stream::iter(chunks),
+            vec![
+                SecretString::from("fixture-secret"),
+                SecretString::from("fixture-secret-tail"),
+                SecretString::from("REDACTED"),
+            ],
+            4096,
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .concat();
+        assert_eq!(
+            output,
+            format!("{}[REDACTED]{}[REDACTED]", "x".repeat(100), "y".repeat(100)).as_bytes()
+        );
     }
 
     #[tokio::test]
@@ -680,6 +842,28 @@ mod tests {
         .concat();
 
         assert_eq!(output, b"data: {\"n\":1}\n\ndata: {\"n\":2}\n\n");
+    }
+
+    #[test]
+    fn denies_json_escaped_headers_and_every_compression_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-echo",
+            HeaderValue::from_static(r#"{"value":"a\u0022bcdefgh"}"#),
+        );
+        assert!(
+            sanitize_headers(
+                &headers,
+                &[SecretString::from("a\"bcdefgh")],
+                CompressionPolicy::IdentityOnly,
+                false
+            )
+            .is_err()
+        );
+        headers.clear();
+        headers.append("content-encoding", HeaderValue::from_static("identity"));
+        headers.append("content-encoding", HeaderValue::from_static("gzip"));
+        assert!(sanitize_headers(&headers, &[], CompressionPolicy::IdentityOnly, false).is_err());
     }
 
     #[test]

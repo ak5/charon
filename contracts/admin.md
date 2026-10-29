@@ -5,9 +5,11 @@ absent from workload routers. This interface does not expose credential values,
 select credential references, mutate policy, or issue workload manifests.
 
 Every POST requires the exact configured `Origin`. Endpoints with structured
-input limit JSON bodies to 16 KiB, accept exactly `application/json`, and reject
+input limit JSON bodies to 16 KiB and ten seconds, accept exactly `application/json`, and reject
 unknown fields. Endpoints listed with no input do not parse a request body. Challenges expire after five minutes and are stored server-side.
-The listener limits origin-accepted non-GET requests to 30 per 60-second window and serves responses with
+The listener gives authenticated and unauthenticated requests separate budgets
+of 30 origin-accepted non-GET requests per 60-second window. Authenticated vault
+locking is exempt from these budgets. Responses use
 no-store caching, restrictive CSP, HSTS, no-referrer and nosniff headers.
 
 | Endpoint | Input | Authorization | Success |

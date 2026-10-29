@@ -83,6 +83,7 @@ impl AppState {
             infrastructure_hosts.insert(host.to_ascii_lowercase());
         }
         let mut builder = Client::builder()
+            .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .dns_resolver(PinnedResolver::new(service_hosts, infrastructure_hosts));
@@ -423,8 +424,26 @@ async fn forward_inner(state: &AppState, request: Request) -> Result<Response> {
     forward_inner_as(state, request, None).await
 }
 
-#[allow(clippy::too_many_lines)]
 async fn forward_inner_as(
+    state: &AppState,
+    request: Request,
+    authorized: Option<AuthorizedWorkload>,
+) -> Result<Response> {
+    let target = absolute_target(request.uri())?;
+    let lifetime = state
+        .config
+        .service_for_host(target.host_str().unwrap_or_default())
+        .map_or(10, |policy| policy.response.max_duration_seconds);
+    timeout(
+        Duration::from_secs(lifetime),
+        forward_authorized(state, request, authorized),
+    )
+    .await
+    .context("request lifetime exceeded")?
+}
+
+#[allow(clippy::too_many_lines)]
+async fn forward_authorized(
     state: &AppState,
     request: Request,
     authorized: Option<AuthorizedWorkload>,
@@ -590,9 +609,9 @@ async fn forward_inner_as(
     if let Some((name, value)) = hydrated {
         upstream = upstream.header(name, value);
     }
-    upstream = upstream
-        .body(request_body)
-        .timeout(Duration::from_secs(policy.response.max_duration_seconds));
+    upstream = upstream.body(request_body).timeout(
+        Duration::from_secs(policy.response.max_duration_seconds).saturating_sub(started.elapsed()),
+    );
 
     let response = upstream.send().await.context("upstream request failed")?;
     let status = response.status();
@@ -615,13 +634,19 @@ async fn forward_inner_as(
         })
         .collect::<Vec<_>>();
     protected.extend(encoded);
+    let response_limit = match &policy.response.body {
+        ResponseMode::BufferedStructured { max_bytes, .. } => {
+            (*max_bytes).min(policy.response.max_bytes)
+        }
+        _ => policy.response.max_bytes,
+    };
+    enforce_content_length(response.headers(), response_limit, "response")?;
     let response_headers = sanitize_headers(
         response.headers(),
         &protected,
         policy.response.compression,
         opaque,
     )?;
-    enforce_content_length(&response_headers, policy.response.max_bytes, "response")?;
     if let ResponseMode::OpaqueStream { content_types } = &policy.response.body {
         let media_type = response_headers
             .get(http::header::CONTENT_TYPE)
@@ -634,8 +659,8 @@ async fn forward_inner_as(
     }
     let guarded = guard_stream(
         response.bytes_stream(),
-        policy.response.max_bytes,
-        Duration::from_secs(policy.response.max_duration_seconds),
+        response_limit,
+        Duration::from_secs(policy.response.max_duration_seconds).saturating_sub(started.elapsed()),
         Duration::from_secs(policy.response.idle_timeout_seconds),
     );
     let mut response_body = match &policy.response.body {
@@ -663,14 +688,10 @@ async fn forward_inner_as(
             max_bytes,
             forbidden_fields,
         } => {
-            let chunks = guarded.collect::<Vec<_>>().await;
-            let mut complete = Vec::new();
-            for chunk in chunks {
+            let mut complete = zeroize::Zeroizing::new(Vec::new());
+            let mut chunks = guarded;
+            while let Some(chunk) = chunks.next().await {
                 complete.extend_from_slice(&chunk?);
-            }
-            if complete.len() > *max_bytes {
-                complete.zeroize();
-                anyhow::bail!("buffered structured response exceeds its configured limit");
             }
             let sanitized = sanitize_json_document(&complete, forbidden_fields)?;
             complete.zeroize();
@@ -1044,9 +1065,13 @@ fn basic_password(headers: &HeaderMap, expected_username: &str) -> Option<String
 
 async fn take_bounded_body(body: &mut Body) -> Result<Bytes> {
     let taken = std::mem::replace(body, Body::empty());
-    to_bytes(taken, MAX_REQUEST_BODY_BYTES)
-        .await
-        .context("structured request body exceeds its configured limit")
+    timeout(
+        Duration::from_secs(10),
+        to_bytes(taken, MAX_REQUEST_BODY_BYTES),
+    )
+    .await
+    .context("structured request body timed out")?
+    .context("structured request body exceeds its configured limit")
 }
 
 fn audit_forwarded(
@@ -1581,6 +1606,13 @@ mod tests {
             response: ResponsePolicy::text_stream(4096, 30, 5, 1024),
             transparent_listen: None,
         }
+    }
+
+    #[tokio::test]
+    async fn stalled_structured_body_times_out() {
+        tokio::time::pause();
+        let mut body = Body::from_stream(stream::pending::<std::io::Result<Bytes>>());
+        assert!(super::take_bounded_body(&mut body).await.is_err());
     }
 
     #[tokio::test]

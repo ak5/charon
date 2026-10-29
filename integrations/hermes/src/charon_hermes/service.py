@@ -190,12 +190,19 @@ class Journal:
         self._path = directory / "tool-receipts.jsonl"
         self._previous = "sha256:" + ("0" * 64)
         self._lock = Lock()
+        self._failed = False
         if self._path.exists():
             file_metadata = self._path.lstat()
             if not stat.S_ISREG(file_metadata.st_mode) or file_metadata.st_mode & 0o077:
                 raise ValueError("receipt journal permissions are too broad")
-            with self._path.open("rb") as handle:
+            with self._path.open("r+b") as handle:
+                end = 0
                 for line in handle:
+                    if not line.endswith(b"\n"):
+                        handle.truncate(end)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                        break
                     try:
                         value = json.loads(line)
                     except json.JSONDecodeError as error:
@@ -209,11 +216,14 @@ class Journal:
                     if value.get("chain_digest") != expected:
                         raise ValueError("receipt journal digest is invalid")
                     self._previous = expected
+                    end += len(line)
 
     def append(self, receipt: dict[str, Any]) -> None:
         if not _valid_receipt(receipt):
             raise ValueError("receipt is invalid")
         with self._lock:
+            if self._failed:
+                raise OSError("receipt journal unavailable")
             envelope = {
                 "receipt": receipt,
                 "chain_previous": self._previous,
@@ -229,7 +239,27 @@ class Journal:
                 metadata = os.fstat(descriptor)
                 if not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077:
                     raise ValueError("receipt journal permissions are too broad")
-                os.write(descriptor, canonical_json(envelope) + b"\n")
+                start = metadata.st_size
+                try:
+                    data = memoryview(canonical_json(envelope) + b"\n")
+                    while data:
+                        written = os.write(descriptor, data)
+                        if written <= 0:
+                            raise OSError("receipt append made no progress")
+                        data = data[written:]
+                    os.fsync(descriptor)
+                    parent = os.open(self._path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(parent)
+                    finally:
+                        os.close(parent)
+                except OSError:
+                    try:
+                        os.ftruncate(descriptor, start)
+                        os.fsync(descriptor)
+                    except OSError:
+                        self._failed = True
+                    raise
             finally:
                 os.close(descriptor)
             self._previous = envelope["chain_digest"]
@@ -245,7 +275,7 @@ class Server(socketserver.ThreadingUnixStreamServer):
         self.journal = journal
         self._admission_lock = Lock()
         self._seen_operations: dict[str, int] = {}
-        self._authorizations: dict[str, tuple[str, int]] = {}
+        self._authorizations: dict[str, tuple[dict[str, Any], int]] = {}
         super().__init__(str(path), Handler)
         os.chmod(path, 0o600)
 
@@ -279,7 +309,13 @@ class Server(socketserver.ThreadingUnixStreamServer):
                 return response
             self._seen_operations[operation_id] = now + 300
             authorization_id = f"authorization:{uuid.uuid4().hex}"
-            self._authorizations[authorization_id] = (operation_id, now + 86400)
+            self._authorizations[authorization_id] = (
+                {key: operation[key] for key in (
+                    "version", "operation_id", "integration", "session_id", "tool_call_id",
+                    "tool_name", "classification", "arguments_digest", "task_id",
+                ) if key in operation},
+                now + 86400,
+            )
         response.update({
             "decision": "allow",
             "reason_code": "exact-policy-match",
@@ -296,7 +332,14 @@ class Server(socketserver.ThreadingUnixStreamServer):
         authorization_id = receipt["authorization_id"]
         with self._admission_lock:
             expected = self._authorizations.get(authorization_id)
-            if expected is None or expected[0] != receipt["operation_id"]:
+            if expected is None:
+                return False
+            if expected[1] <= int(time.time()):
+                self._authorizations.pop(authorization_id, None)
+                return False
+            if any(receipt.get(key) != value for key, value in expected[0].items()) or (
+                "task_id" not in expected[0] and "task_id" in receipt
+            ):
                 return False
             try:
                 self.journal.append(receipt)
