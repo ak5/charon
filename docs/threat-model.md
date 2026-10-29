@@ -190,7 +190,14 @@ capability without placing the underlying credential in that workload.
     In-process receipts are operational evidence, not independent attestation
     against a compromised workload.
 30. The Hermes adapter accepts only classifications from its immutable,
-    version-reviewed Telegram tool catalog. Browserless deployment policy omits
+    version-reviewed core catalog and separate exact external-tool catalog.
+    The optional Herdr catalog admits only the 15 reviewed observation names
+    when individually listed in policy. Its read classification relies on
+    Infra's fixed-host, forced-command adapters exposing only ping/list/get/read/wait,
+    with reads bounded to 120 lines and waits to 30 seconds. Charon does not
+    enforce remote argument limits or trust model arguments/MCP annotations.
+    Observation may reveal sensitive terminal output; Infra owns access to it.
+    Browserless deployment policy omits
     browser tools; newly introduced, unclassified, or policy-omitted names fail
     closed. Charon semantic admission does not replace Hermes command approval,
     Charon proxy enforcement, workload-manifest issuance, or network isolation.

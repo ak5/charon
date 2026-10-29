@@ -28,15 +28,15 @@ guard. A Charon denial never executes the tool.
 
 ## Compatibility and policy
 
-The reviewed inventory is in
+The reviewed core inventory is in
 [`compatibility.py`](src/charon_hermes/compatibility.py). All 61 names in
 Hermes's pinned `_HERMES_CORE_TOOLS` list have an explicit classification.
 Browser tools remain classified for upgrade review but are absent from the
 recommended policy because `agent.disabled_toolsets: [browser]` and the
 derivative image both disable them. Desktop, Home Assistant, Kanban, and
 computer-use tools are runtime/configuration-gated and also excluded from this
-profile. Unknown names classify as `unknown`, cannot appear in policy, and are
-denied.
+profile. Separately reviewed external names are described below. Other names
+classify as `unknown`, cannot appear in policy, and are denied.
 
 Classification is whole-tool and does not inspect argument values. Mixed tools
 such as `memory` and `todo` are conservatively `mutation`; `delegate_task`,
@@ -53,10 +53,53 @@ charon-hermes-policy validate --recommended hermes-policy.json
 ```
 
 The checked example is [`examples/policy.json`](examples/policy.json). Omit
-`--recommended` to validate a deliberately narrowed exact subset.
+`--recommended` to validate an explicit selection of reviewed core and external tools.
 Wildcards, duplicate names, unreviewed classifications, different Hermes pins,
 and unknown fields are rejected. Removing an exact entry is the supported way
 to deny a deployment-eligible tool.
+
+### Optional Herdr observation catalog
+
+Version 0.2.2 adds a separate reviewed catalog in
+[`external_tools.py`](src/charon_hermes/external_tools.py). Its only names are
+`mcp__herdr_mac__`, `mcp__herdr_mule__`, and `mcp__herdr_dev__`, each followed by
+exactly `ping`, `agent_list`, `agent_get`, `agent_read`, or `agent_wait`: 15
+explicit entries, all `read`. This notation describes the catalog; policy and
+classification use exact string equality, never prefix or wildcard matching.
+The core inventory, its review digest, schema version 2 and default policy are
+unchanged. Neither model arguments nor MCP server annotations affect classification.
+
+To opt in, add the selected exact entries to `allowed_tools`, each with
+`"classification": "read"`. For the full reviewed observation set plus the
+recommended core policy, use the installed matching wheel:
+
+```sh
+python - <<'PY' > hermes-policy.json
+import json
+from charon_hermes.compatibility import policy_document
+from charon_hermes.external_tools import HERDR_OBSERVATION
+policy = policy_document()
+policy["allowed_tools"].extend(
+    {"name": name, "classification": classification}
+    for name, classification in HERDR_OBSERVATION.items()
+)
+print(json.dumps(policy, indent=2))
+PY
+chmod 0444 hermes-policy.json
+charon-hermes-policy validate hermes-policy.json
+```
+
+Omitted entries remain denied. Mutating methods, session operations, additional
+hosts, lookalike names and unreviewed MCP tools cannot be added to policy. Both
+the plugin and admission policy loader use the same reviewed classifier.
+
+Infra must bind these names to its dedicated observation adapters: fixed SSH
+hosts, forced-command keys, only these five remote methods, reads limited to
+120 lines and waits to 30 seconds. Charon does not inspect raw arguments or
+enforce those remote limits. `read` means no mutation; observed terminal output
+can contain sensitive data and must be authorized for the observing workload.
+Install the 0.2.2 wheel and companion from the same immutable image before
+delivering an opt-in policy. This does not change the Charon network gateway.
 
 ## Container deployment contract
 
@@ -85,10 +128,10 @@ ARG CHARON_HERMES_IMAGE
 FROM ${CHARON_HERMES_IMAGE} AS charon_hermes_artifact
 FROM <pinned-hermes-v2026.8.3-image>
 COPY --from=charon_hermes_artifact \
-  /opt/charon-hermes/wheels/charon_hermes-0.2.1-py3-none-any.whl /tmp/
+  /opt/charon-hermes/wheels/charon_hermes-0.2.2-py3-none-any.whl /tmp/
 RUN python -m pip install --no-deps \
-  /tmp/charon_hermes-0.2.1-py3-none-any.whl \
-  && rm /tmp/charon_hermes-0.2.1-py3-none-any.whl
+  /tmp/charon_hermes-0.2.2-py3-none-any.whl \
+  && rm /tmp/charon_hermes-0.2.2-py3-none-any.whl
 ```
 
 Set `CHARON_HERMES_IMAGE` to the immutable Charon-Hermes tag and registry

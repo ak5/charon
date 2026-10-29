@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .external_tools import HERDR_OBSERVATION
+
 HERMES_VERSION = "v2026.8.3"
 HERMES_COMMIT = "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
 HERMES_PACKAGE_VERSION = "0.20.0"
@@ -69,7 +71,7 @@ class Compatibility:
 def classify_tool(tool_name: str) -> str:
     """Return a reviewed classification or ``unknown`` for fail-closed denial."""
 
-    return CLASSIFICATIONS.get(tool_name, "unknown")
+    return CLASSIFICATIONS.get(tool_name, HERDR_OBSERVATION.get(tool_name, "unknown"))
 
 
 def policy_document() -> dict[str, object]:

@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from charon_hermes.admission import AdmissionClient
 from charon_hermes.config import Settings
-from charon_hermes.compatibility import CLASSIFICATIONS, DEPLOYMENT_TOOLS, policy_document
+from charon_hermes.compatibility import CLASSIFICATIONS, DEPLOYMENT_TOOLS, classify_tool, policy_document
 from charon_hermes.model import Operation, receipt_for
 from charon_hermes.plugin import CharonHermesPlugin, register
 from charon_hermes.service import Journal, Policy, Server
@@ -34,7 +34,7 @@ class FakeContext:
 class ServiceFixture:
     """Run a protected local admission service for one test."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, policy: Policy | None = None) -> None:
         self.socket_path = root / "admission.sock"
         self.state = root / "state"
         value = policy_document()
@@ -42,7 +42,7 @@ class ServiceFixture:
             {"name": "read_file", "classification": "read"},
             {"name": "write_file", "classification": "mutation"},
         ]
-        self.policy = Policy(value)
+        self.policy = policy if policy is not None else Policy(value)
         self.server = Server(self.socket_path, self.policy, Journal(self.state))
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -99,6 +99,83 @@ class PolicyTests(unittest.TestCase):
         policy = Policy(value)
         operation = Operation.create("terminal", {}, "task", "call", "session")
         self.assertEqual(policy.decide(operation.value), (False, "tool-not-allowed"))
+
+
+class ExternalToolTests(unittest.TestCase):
+    names = tuple(
+        f"mcp__herdr_{host}__{method}"
+        for host in ("mac", "mule", "dev")
+        for method in ("ping", "agent_list", "agent_get", "agent_read", "agent_wait")
+    )
+
+    def test_herdr_requires_explicit_policy_and_matching_classification(self) -> None:
+        default = Policy(policy_document())
+        for name in self.names:
+            with self.subTest(name=name):
+                operation = Operation.create(name, {"classification": "mutation"}, "task", "call", "session")
+                self.assertEqual(operation.value["classification"], "read")
+                self.assertFalse(default.decide(operation.value)[0])
+                value = {**policy_document(), "allowed_tools": [{"name": name, "classification": "read"}]}
+                policy = Policy(value)
+                self.assertTrue(policy.decide(operation.value)[0])
+                operation.value["classification"] = "mutation"
+                self.assertFalse(policy.decide(operation.value)[0])
+                value["allowed_tools"][0]["classification"] = "mutation"
+                with self.assertRaises(ValueError):
+                    Policy(value)
+
+    def test_unreviewed_mcp_names_and_annotations_cannot_grant_access(self) -> None:
+        denied = (
+            "mcp__herdr_mac__agent_prompt", "mcp__herdr_mule__agent_send_keys",
+            "mcp__herdr_dev__session_list", "mcp__herdr_dev__session_create",
+            "mcp__herdr_prod__agent_read", "mcp__other__agent_read",
+            "mcp__herdr_mac__agent_read_extra", "mcp__herdr_mac__agent_read ",
+            "MCP__herdr_mac__agent_read", "mcp__herdr_*__agent_read",
+        )
+        for name in denied:
+            with self.subTest(name=name):
+                self.assertEqual(classify_tool(name), "unknown")
+                operation = Operation.create(name, {"readOnlyHint": True, "classification": "read"}, "task", "call", "session")
+                self.assertEqual(operation.value["classification"], "unknown")
+                with self.assertRaises(ValueError):
+                    Policy({**policy_document(), "allowed_tools": [{"name": name, "classification": "read"}]})
+
+    def test_all_herdr_tools_through_plugin_socket_and_receipts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            value = {**policy_document(), "allowed_tools": [
+                {"name": name, "classification": "read"} for name in self.names
+            ]}
+            path = root / "policy.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            path.chmod(0o444)
+            fixture = ServiceFixture(root, Policy.load(path))
+            plugin = CharonHermesPlugin(Settings(fixture.socket_path, timeout_ms=500))
+            try:
+                for index, name in enumerate(self.names):
+                    args = {"target": "synthetic-private-marker", "lines": 120}
+                    ids = {"tool_call_id": f"call-{index}", "session_id": "session"}
+                    self.assertIsNone(plugin.pre_tool_call(name, args, "task", **ids), name)
+                    plugin.post_tool_call(name, args, "synthetic-output-marker", "task", **ids)
+                denied = plugin.pre_tool_call(
+                    "mcp__herdr_dev__agent_prompt", {"readOnlyHint": True}, "task",
+                    annotations={"readOnlyHint": True}, classification="read",
+                )
+                self.assertEqual(denied["action"], "block")
+                forged = Operation.create("mcp__herdr_dev__agent_prompt", {}, "task", "forged", "session")
+                forged.value["classification"] = "read"
+                self.assertEqual(request(fixture.socket_path, {"kind": "admit", "operation": forged.value}, 500)["decision"], "deny")
+                plugin.finalize()
+                journal = (fixture.state / "tool-receipts.jsonl").read_text(encoding="utf-8")
+                receipts = [json.loads(line)["receipt"] for line in journal.splitlines()]
+                self.assertEqual({entry["tool_name"] for entry in receipts}, set(self.names))
+                self.assertEqual(len(receipts), 15)
+                self.assertTrue(all(entry["classification"] == "read" for entry in receipts))
+                self.assertNotIn("synthetic-private-marker", journal)
+                self.assertNotIn("synthetic-output-marker", journal)
+            finally:
+                plugin._exporter.close()
+                fixture.close()
 
 
 class ProtocolTests(unittest.TestCase):
