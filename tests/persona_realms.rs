@@ -185,7 +185,7 @@ async fn two_persona_realms_fail_closed_and_fail_independently() -> Result<()> {
         })?;
         let response = use_realm(alice, upstream_address, &manifest).await?;
         assert!(response.status().is_success());
-        assert_eq!(response.text().await?, "Bearer [REDACTED]");
+        assert_eq!(response.text().await?, "[REDACTED]");
     }
 
     let cross_persona = token(Grant {
@@ -276,7 +276,7 @@ async fn two_persona_realms_fail_closed_and_fail_independently() -> Result<()> {
     })?;
     let response = use_realm(bob, upstream_address, &bob_independent).await?;
     assert!(response.status().is_success());
-    assert_eq!(response.text().await?, "Bearer [REDACTED]");
+    assert_eq!(response.text().await?, "[REDACTED]");
 
     let readiness_bytes = reqwest::get(format!("http://{bob}/readyz"))
         .await?

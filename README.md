@@ -283,7 +283,7 @@ See [the contribution policy](CONTRIBUTING.md).
 - [Threat model](docs/threat-model.md)
 - [Deployment guide](docs/deployment.md)
 - [Architecture decisions](docs/adr/)
-- [Human-approval contracts](contracts/README.md)
+- [Telegram request approvals](docs/adr/0009-local-telegram-allow-once.md)
 
 ## License
 

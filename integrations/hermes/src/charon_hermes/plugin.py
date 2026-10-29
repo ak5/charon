@@ -19,7 +19,7 @@ class CharonHermesPlugin:
         self._settings = settings
         self._admission = AdmissionClient(settings)
         self._exporter = ReceiptExporter(settings)
-        self._pending: dict[tuple[str, str, str], deque[tuple[Operation, str]]] = defaultdict(deque)
+        self._pending: dict[tuple[str, str, str, str], deque[tuple[Operation, str]]] = defaultdict(deque)
         self._lock = Lock()
 
     @staticmethod
@@ -45,13 +45,13 @@ class CharonHermesPlugin:
         arguments: dict[str, Any],
         task_id: str,
         kwargs: dict[str, Any],
-    ) -> tuple[str, str, str]:
+    ) -> tuple[str, str, str, str]:
         from .canonical import sha256_digest
 
-        call_id = self._call_id(kwargs)
-        if call_id:
-            return ("call", call_id, "")
-        return (self._session_id(task_id, kwargs), tool_name, sha256_digest(arguments))
+        return (
+            self._session_id(task_id, kwargs), tool_name,
+            self._call_id(kwargs), sha256_digest(arguments),
+        )
 
     def pre_tool_call(
         self,

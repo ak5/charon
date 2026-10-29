@@ -41,7 +41,7 @@ unlock remain independent of Telegram. Lock cancels pending requests and the
 channel; restart retains neither the unlocked snapshot nor pending approvals.
 
 The gate fails closed on denial, expiry, cancellation, capacity exhaustion, or
-lack of a valid decision. Waiting lasts at most two minutes; exclusive gateway
+lack of a valid decision. Waiting lasts at most two minutes; configured
 operation deadlines may shorten it. Per-process prompt admission is limited to
 10 per rolling minute and 32 pending requests. Completion or cancellation does
 not refund the rate budget; lock/unlock does not reset it. Restart resets the
@@ -61,8 +61,7 @@ require trusted configuration and restart. Operator recovery is documented in
 [owner operations](../admin.md) and [bot setup](../telegram-setup.md).
 
 An external broker, signed approval assertions, sessions, reusable rules, and a
-generic channel interface are unnecessary for this bounded flow. The separate
-[broker design](0005-human-approval-broker.md) is not required to deploy it.
+generic channel interface are unnecessary for this bounded flow.
 The preview does not reconstruct an original shell command. It lets the owner
 review the application request with public credential references before lookup;
 client-generated framing is outside this preview.

@@ -71,14 +71,9 @@ capability without placing the underlying credential in that workload.
   listener bind one realm workload to one exact service. This is an identity
   boundary only while other workloads cannot reach or spoof it and the
   workload has no direct-egress route.
-- **Human approval broker:** optional external control-plane component that
-  validates normalized requests, persists bounded rules and terminal decisions,
-  authenticates approval-channel events, and signs short-lived assertions for
-  the workload identity issuer. Charon never calls it.
-- **Approval channel and human:** Telegram is the first presentation adapter.
-  One immutable positive numeric user ID authenticates a private chat only when
-  actor ID, chat ID, and configured ID are equal; usernames and display text do
-  not. The channel cannot create rules or assertions.
+- **Telegram and owner:** the optional built-in gate trusts the dedicated bot
+  account and one immutable positive numeric owner ID. Actor ID, private chat ID,
+  configured owner ID and original message must match; usernames confer no authority.
 - **Persona realm:** one Charon process/container, KeePass database,
   configuration, unlocked snapshot, listener, runtime filesystem, and delegated
   intermediate CA per control-plane persona. No realm can read another realm's
@@ -181,18 +176,11 @@ capability without placing the underlying credential in that workload.
 25. The concrete KeePass store returns only `SecretString` and the closed,
     data-free `StoreError` taxonomy. Parser errors and database content never
     enter responses or logs. There is no fallback credential source.
-26. External broker approval is resolved before manifest issuance.
-    Assertions bind the normalized request digest, active lease, resource,
-    action, risk tier, policy generation, and TTL bound. The issuer consumes
-    each assertion and mints a new single-use manifest. Charon never queries that
-    broker. Its optional local Telegram gate runs after local authorization,
-    before credential resolution, and cannot widen destination policy.
-27. External broker reusable approvals are structured, expiring, use-bounded, revocable, and
-    cannot contain wildcards or natural-language predicates. Critical and
-    unknown operations cannot receive reusable approval. Telegram callbacks are
-    opaque, random, single-use, expiring, and bound server-side to one pending
-    request and the immutable equal private actor/chat ID. The local gate also
-    binds the original message ID and creates no reusable rule.
+26. The optional local Telegram gate runs after local authorization, before
+    credential resolution, and cannot widen destination policy.
+27. Telegram callbacks are opaque, random, single-use, expiring, and bound to
+    one pending request, original message and equal private actor/chat ID.
+    The gate creates no reusable rule.
 28. Workload tool adapters submit only tool name, classification, argument-key
     names, identifiers, and a digest of canonical arguments for admission. They
     exclude raw arguments, commands, credentials, manifests, and provider
@@ -298,15 +286,15 @@ from an admitted Hermes tool. The separate tool admission service is unchanged.
   replicas require a shared atomic nonce store or issuer-side one-shot exchange.
 - Charon has bounded requests, responses, handshakes, tunnels, approval
   waits, and manifest lifetimes. The admin listener limits origin-accepted
-  non-GET requests to 30 per minute, with at most eight passkeys, 32 pending
-  ceremonies and 32 sessions. Capacity is checked at ceremony start and finish.
+  non-GET requests to separate authenticated and unauthenticated budgets of
+  30 per minute. Authenticated vault locking is exempt so budget exhaustion
+  cannot block an existing owner session from locking. JSON body reads expire
+  after ten seconds. There are at most eight passkeys, 32 pending ceremonies
+  and 32 sessions. Capacity is checked at ceremony start and finish.
   Workload listeners have no connection/request-rate limiter; deployments must
   bound connections and resources at the listener/container/network layer.
-- The optional approval broker, its durable rule/nonce store, signing key,
-  Telegram bot account, allowlisted human accounts, and identity issuer checks
-  extend the trusted control plane. Telegram outage or account-recovery
-  ambiguity fails closed for new approvals but does not change Charon's
-  credential boundary.
+- The optional Telegram bot account and owner account extend the trusted
+  approval boundary. Telegram outage fails closed for new approvals.
 - The Hermes integration's exact local admission service does not issue Charon
   manifests or enforce network isolation. Filesystem-protected Unix sockets
   provide an operator boundary only when the service runs under an identity the
@@ -316,7 +304,8 @@ from an admitted Hermes tool. The separate tool admission service is unchanged.
   a signed per-request manifest. Generic clients cannot securely correlate a
   network request to one Hermes tool call, so Charon authorizes it independently.
 - Signed/transparent structured request hydration buffers JSON and form bodies to the request
-  limit. WebSockets, IPv6, UDP, and QUIC are denied rather than partially
+  limit within ten seconds. Their total operation deadline starts before body
+  buffering and includes approval and upstream work. WebSockets, IPv6, UDP, and QUIC are denied rather than partially
   supported.
 
 - Workload/admin network isolation is enforced by Infra. A separate listener and
@@ -325,4 +314,70 @@ from an admitted Hermes tool. The separate tool admission service is unchanged.
 - Local Telegram calls go directly to `api.telegram.org` over verified HTTPS;
   they ignore upstream and ambient proxies. Permit only Charon to use that
   egress. Signed/transparent local decisions wait at most two minutes;
-  exclusive decisions additionally count against the route operation deadline.
+  all decisions also count against the configured operation deadline.
+
+## Response and receipt audit guarantees
+
+Known credentials are matched both as raw bytes and as decoded JSON character
+sequences, including mixed escapes, Unicode and surrogate pairs, across chunk
+boundaries. The scanner consumes original input once; replacement markers are
+never rescanned. Only a potential matching suffix is retained, bounded by the
+longest encoded protected value plus a partial escape. This applies to plain,
+JSON, SSE and opaque routes; matching can alter binary data. It is not a general
+information-flow guarantee against arbitrary transformations by a destination.
+
+Upstream Content-Length is checked before stripping. Buffered JSON uses its
+smaller configured byte limit during reading and stops on the first overflow
+or stream error, before parsing. Neither missing lengths nor fragmented bodies
+bypass the limit. The operation deadline is not renewed at response delivery.
+
+Signed/transparent clients ignore ambient proxy settings. Only the explicitly
+configured upstream proxy may route requests. With that trusted egress enabled,
+the proxy resolves destination names; Infra must enforce destination DNS/address
+restrictions there. Direct connections use Charon's pinned resolver.
+
+Hermes receipt authorizations bind every shared operation identity field and
+argument digest. Admission expires after five minutes; receipt acceptance has
+an independent one-day window, checked at acceptance. A receipt cannot change
+its admitted tool, classification, session, task or arguments. Successful
+journal acknowledgments follow complete writes and file/directory sync. Failed
+appends roll back; rollback failure makes the journal unavailable until restart.
+Recovery truncates only an unterminated final append and rejects complete corrupt
+records. The local hash chain still requires a trusted external digest to detect
+a malicious rewrite or suffix removal.
+
+## Concurrent revocation and resource bounds
+
+Unlock captures the vault generation before reading its body. Lock invalidates
+that generation; logout also cancels pending unlocks without discarding an
+already unlocked snapshot. Blocking workers recheck session validity before
+decryption. Recovery-passkey enrollment rechecks the bound session after body
+arrival, under the same lock used for session revocation and registration commit.
+
+Rejected manifest replays cannot overwrite a retained nonce's expiry. The
+per-process cache holds at most 16384 unexpired nonces and denies new admissions
+at capacity. Entries remain protected for their original window plus clock skew.
+
+Both receipt implementations hold an exclusive OS lock for their journal inode
+through replay and writing. Storage must support these locks. An operator must
+not replace or delete a journal beneath an active writer; locks do not protect
+against an administrator rewriting storage. Hermes additionally bounds recovery
+lines, concurrent connections, absolute socket-read time and retained admission
+state, as specified in the tool-integration contract. Malformed or duplicate JSON
+fields fail closed rather than raising an unhandled worker exception.
+
+Response scanning yields cooperatively on long almost-matching input. Final
+mediation is itself covered by the remaining operation and idle deadlines;
+checking only upstream read time would not bound sanitizer work. Header and
+body redaction remain known-secret matching, not proof against every encoding.
+
+Structured JSON sanitation operates on decoded values before serialization,
+including numeric credential echoes and protected field names. It does not
+insert unquoted replacement markers into JSON syntax. The final mediated stream
+has its own byte bound as well as deadlines, so replacement expansion cannot
+bypass the aggregate output limit.
+
+Hermes pre/post-hook correlation includes session, tool, call ID and argument
+digest. A call ID reused across sessions cannot attach another call's outcome
+to an admitted operation. Receipts remain workload-reported evidence, not
+independent proof of execution.

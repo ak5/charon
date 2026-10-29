@@ -160,7 +160,7 @@ async fn hydrates_capability_reference_without_exposing_secret_to_client() -> Re
 
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let body: Bytes = response.bytes().await?;
-    assert_eq!(&body[..], b"Bearer [REDACTED]");
+    assert_eq!(&body[..], b"[REDACTED]");
     let journal_path = receipt_directory.path().join("receipts.jsonl");
     let mut journal = String::new();
     for _ in 0..20 {
@@ -171,7 +171,7 @@ async fn hydrates_capability_reference_without_exposing_secret_to_client() -> Re
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
     assert!(journal.contains("\"capability\":\"mock-whoami\""));
-    assert!(journal.contains("\"delivered_bytes\":17"));
+    assert!(journal.contains("\"delivered_bytes\":10"));
     assert!(!journal.contains("real-secret"));
     assert!(!journal.contains("authorization"));
     Ok(())
@@ -662,5 +662,241 @@ async fn deployment_smoke_target_reaches_identity_check_without_a_secret() -> Re
         .await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(store.lookup_count(), 0);
+    Ok(())
+}
+
+fn audit_config(response: charon::config::ResponsePolicy) -> Config {
+    Config {
+        realm: realm(),
+        listen: "127.0.0.1:0"
+            .parse()
+            .unwrap_or_else(|error| panic!("{error}")),
+        upstream_proxy: None,
+        keepass: common::config("developer"),
+        admin: None,
+        tls: None,
+        identity: identity_config(),
+        receipts: None,
+        capabilities: vec![CapabilityPolicy {
+            name: "audit".into(),
+            persona: "developer".into(),
+            service: "mock".into(),
+            methods: vec!["POST".into()],
+            paths: vec!["/audit".into()],
+        }],
+        services: vec![ServicePolicy {
+            name: "mock".into(),
+            hosts: vec!["127.0.0.1".into()],
+            hydration: charon::config::HydrationPolicy {
+                sink: charon::broker::HydrationSink::Authorization,
+                value_template: "Bearer {secret}".into(),
+            },
+            secret_ref: "CHARON_MOCK_TOKEN".into(),
+            response,
+            transparent_listen: None,
+        }],
+    }
+}
+
+fn audit_state(config: Config) -> Result<Arc<AppState>> {
+    Ok(Arc::new(AppState::new(
+        config,
+        Arc::new(common::store(HashMap::from([(
+            "CHARON_MOCK_TOKEN".into(),
+            "a\"bcdefgh".into(),
+        )]))?),
+    )?))
+}
+
+fn audit_request(target: &str, body: Body) -> Result<http::Request<Body>> {
+    Ok(http::Request::builder()
+        .method("POST")
+        .uri(target)
+        .header(
+            "proxy-authorization",
+            format!("Charon {}", token("audit", "nonce-audit-12345")?),
+        )
+        .header("authorization", "Bearer {{charon.audit}}")
+        .body(body)?)
+}
+
+#[tokio::test]
+async fn buffered_response_rejects_length_and_chunk_overflow_before_completion() -> Result<()> {
+    use tower::ServiceExt as _;
+    // The upstream never completes: rejecting must happen from headers or the first overflowing chunk.
+    for framing in [
+        "Content-Length: 129\r\n\r\n",
+        "Transfer-Encoding: chunked\r\n\r\n81\r\n",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await?;
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await?;
+            socket
+                .write_all(
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{framing}")
+                        .as_bytes(),
+                )
+                .await?;
+            if framing.starts_with("Transfer") {
+                socket.write_all(&[b'x'; 129]).await?;
+                socket.write_all(b"\r\n").await?;
+            }
+            std::future::pending::<()>().await;
+            Ok::<_, std::io::Error>(())
+        });
+        let mut policy = charon::config::ResponsePolicy::text_stream(4096, 30, 10, 1024);
+        policy.body = charon::broker::ResponseMode::BufferedStructured {
+            max_bytes: 128,
+            forbidden_fields: vec![],
+        };
+        let response = timeout(
+            Duration::from_secs(2),
+            app(audit_state(audit_config(policy))?).oneshot(audit_request(
+                &format!("http://{address}/audit"),
+                Body::empty(),
+            )?),
+        )
+        .await?;
+        server.abort();
+        assert_eq!(response?.status(), StatusCode::BAD_GATEWAY);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn text_response_checks_original_content_length() -> Result<()> {
+    use tower::ServiceExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await?;
+        let mut request = [0u8; 4096];
+        let _ = socket.read(&mut request).await?;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4097\r\n\r\n")
+            .await?;
+        std::future::pending::<()>().await;
+        Ok::<_, std::io::Error>(())
+    });
+    let policy = charon::config::ResponsePolicy::text_stream(4096, 30, 10, 1024);
+    let response = timeout(
+        Duration::from_secs(2),
+        app(audit_state(audit_config(policy))?).oneshot(audit_request(
+            &format!("http://{address}/audit"),
+            Body::empty(),
+        )?),
+    )
+    .await?;
+    server.abort();
+    assert_eq!(response?.status(), StatusCode::BAD_GATEWAY);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn operation_deadline_includes_structured_request_buffering() -> Result<()> {
+    use tower::ServiceExt as _;
+    let mut config = audit_config(charon::config::ResponsePolicy::text_stream(
+        4096, 1, 1, 1024,
+    ));
+    config.services[0].hydration.sink = charon::broker::HydrationSink::JsonField {
+        pointer: "/token".into(),
+    };
+    let state = audit_state(config)?;
+    let request = audit_request(
+        "http://127.0.0.1:1/audit",
+        Body::from_stream(stream::pending::<std::io::Result<Bytes>>()),
+    )?;
+    let started = tokio::time::Instant::now();
+    let response = app(state).oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(started.elapsed() <= Duration::from_secs(1));
+    Ok(())
+}
+
+#[tokio::test]
+async fn json_secret_echo_is_redacted_in_text_and_structured_modes() -> Result<()> {
+    use tower::ServiceExt as _;
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().fallback(any(|| async {
+                axum::Json(serde_json::json!({"echo": "a\"bcdefgh"}))
+            })),
+        )
+        .await
+    });
+    for mode in [
+        charon::broker::ResponseMode::TextStream,
+        charon::broker::ResponseMode::BufferedStructured {
+            max_bytes: 128,
+            forbidden_fields: vec![],
+        },
+    ] {
+        let mut policy = charon::config::ResponsePolicy::text_stream(4096, 30, 10, 1024);
+        policy.body = mode;
+        let response = app(audit_state(audit_config(policy))?)
+            .oneshot(audit_request(
+                &format!("http://{address}/audit"),
+                Body::empty(),
+            )?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 4096).await?;
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body)?,
+            serde_json::json!({"echo": "[REDACTED]"})
+        );
+    }
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn ambient_proxy_cannot_bypass_destination_dns_policy() -> Result<()> {
+    use tower::ServiceExt as _;
+    if std::env::var_os("CHARON_SYNTHETIC_PROXY_CHILD").is_some() {
+        let mut config = audit_config(charon::config::ResponsePolicy::text_stream(
+            4096, 2, 1, 1024,
+        ));
+        config.services[0].hosts = vec!["localhost".into()];
+        let response = app(audit_state(config)?)
+            .oneshot(audit_request("https://localhost/audit", Body::empty())?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        return Ok(());
+    }
+    // A separate process avoids changing the environment under concurrent Rust tests.
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy = format!("http://{}", listener.local_addr()?);
+    let mut child = tokio::process::Command::new(std::env::current_exe()?);
+    child
+        .args([
+            "--exact",
+            "ambient_proxy_cannot_bypass_destination_dns_policy",
+            "--nocapture",
+        ])
+        .env("CHARON_SYNTHETIC_PROXY_CHILD", "1")
+        .env("HTTPS_PROXY", &proxy)
+        .env("https_proxy", &proxy)
+        .env("ALL_PROXY", &proxy)
+        .env("all_proxy", &proxy)
+        .env("NO_PROXY", "")
+        .env("no_proxy", "")
+        .kill_on_drop(true);
+    tokio::select! {
+        connection = listener.accept() => {
+            connection?;
+            anyhow::bail!("ambient proxy received unauthorized outbound traffic");
+        }
+        result = timeout(Duration::from_secs(10), child.output()) => {
+            let result = result??;
+            assert!(result.status.success(), "synthetic child failed: {}", String::from_utf8_lossy(&result.stderr));
+        }
+    }
     Ok(())
 }

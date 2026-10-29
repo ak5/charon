@@ -90,3 +90,7 @@ CONNECT tunnels. It binds one fixed isolated workload, supports secretless
 forwarding and typed credential sinks, and requires its own validated schema.
 Signed proxy authentication, transparent service lanes, and Hermes tool
 admission remain independent controls. Infra owns isolation, trust and cutover.
+
+The in-process replay cache holds at most 16384 unexpired nonces. At capacity,
+new manifests are denied; existing protection is never evicted or shortened by
+a rejected replay. Expired entries are pruned on admission.

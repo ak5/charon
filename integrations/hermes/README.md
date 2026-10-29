@@ -212,3 +212,18 @@ CONNECT tunnels. It binds one fixed isolated workload, supports secretless
 forwarding and typed credential sinks, and requires its own validated schema.
 Signed proxy authentication, transparent service lanes, and Hermes tool
 admission remain independent controls. Infra owns isolation, trust and cutover.
+
+### Admission and journal bounds
+
+The local service accepts at most 32 simultaneous connections and gives each
+request five seconds to arrive. Client deadlines include all reads; slow bytes
+do not extend the configured timeout. Up to 4096 unexpired operation IDs and
+4096 receipt authorizations are retained. Exhaustion denies new calls and does
+not evict existing authorizations. Duplicate or malformed protocol fields deny.
+
+Only one process can hold a receipt journal's OS file lock. Do not replace its
+file while the service is running. Recovery validates bounded lines and rejects
+complete corrupt records. Irrecoverable journal failure reports unavailable
+readiness and denies new admissions until restart. These controls complement
+filesystem isolation; they do not turn an in-process plugin into an independent
+security boundary.

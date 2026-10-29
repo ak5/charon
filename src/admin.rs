@@ -105,6 +105,7 @@ struct Runtime {
     sessions: HashMap<[u8; 32], Instant>,
     rate_started: Instant,
     rate_count: u32,
+    owner_rate_count: u32,
 }
 /// Trusted admin state holds `WebAuthn` challenges server-side, never in browser tokens.
 pub struct Admin {
@@ -214,6 +215,7 @@ impl Admin {
                     sessions: HashMap::new(),
                     rate_started: Instant::now(),
                     rate_count: 0,
+                    owner_rate_count: 0,
                 }),
             }),
             code,
@@ -357,7 +359,11 @@ async fn body<T: DeserializeOwned>(request: Request) -> Result<T> {
             .is_some_and(|v| v == "application/json"),
         "JSON required"
     );
-    let bytes = to_bytes(request.into_body(), 16384).await?;
+    let bytes = tokio::time::timeout(
+        Duration::from_secs(10),
+        to_bytes(request.into_body(), 16384),
+    )
+    .await??;
     // Network frames can share Hyper's read buffer; do not reject valid requests.
     // Our owned parsing copy is zeroized, independently of transport buffers.
     let mut owned = zeroize::Zeroizing::new(bytes.to_vec());
@@ -376,15 +382,24 @@ async fn protect(State(admin): State<Arc<Admin>>, request: Request, next: Next) 
         {
             return secure_response(denied());
         }
+        let authenticated = admin.session(request.headers()).is_some();
+        // A network client must never consume the owner's emergency lock budget.
+        let emergency_lock = authenticated && request.uri().path() == "/api/lock";
         let Ok(mut runtime) = admin.runtime.lock() else {
             return secure_response(failed());
         };
         if runtime.rate_started.elapsed() >= Duration::from_secs(60) {
             runtime.rate_started = Instant::now();
             runtime.rate_count = 0;
+            runtime.owner_rate_count = 0;
         }
-        runtime.rate_count += 1;
-        if runtime.rate_count > 30 {
+        let counter = if authenticated {
+            &mut runtime.owner_rate_count
+        } else {
+            &mut runtime.rate_count
+        };
+        *counter = counter.saturating_add(1);
+        if *counter > 30 && !emergency_lock {
             return secure_response(
                 (StatusCode::TOO_MANY_REQUESTS, "Try again later").into_response(),
             );
@@ -438,6 +453,11 @@ async fn register_start(State(admin): State<Arc<Admin>>, request: Request) -> Re
         return failed();
     };
     r.pending.retain(|_, p| p.deadline > Instant::now());
+    let session = session.filter(|id| {
+        r.sessions
+            .get(id)
+            .is_some_and(|expiry| *expiry > Instant::now())
+    });
     let initial = r.registrations.keys.is_empty();
     if initial {
         let Some((expected, deadline)) = r.enrollment else {
@@ -512,6 +532,11 @@ async fn register_finish(State(admin): State<Arc<Admin>>, request: Request) -> R
     let Ceremony::Registration(state, bound_session) = pending.ceremony else {
         return denied();
     };
+    let session = session.filter(|id| {
+        r.sessions
+            .get(id)
+            .is_some_and(|expiry| *expiry > Instant::now())
+    });
     if pending.deadline <= Instant::now()
         || r.registrations.keys.len() >= 8
         || bound_session != session
@@ -634,15 +659,31 @@ struct Unlock {
     password: SecretString,
 }
 async fn unlock(State(admin): State<Arc<Admin>>, request: Request) -> Response {
-    if admin.session(request.headers()).is_none() {
+    let Some(session) = admin.session(request.headers()) else {
         return denied();
-    }
+    };
+    let generation = admin.store.unlock_generation();
     let Ok(input) = body::<Unlock>(request).await else {
         return denied();
     };
     let password = input.password;
-    let store = admin.store.clone();
-    match tokio::task::spawn_blocking(move || store.unlock(password)).await {
+    match tokio::task::spawn_blocking(move || {
+        let runtime = admin
+            .runtime
+            .lock()
+            .map_err(|_| crate::keepass::StoreError::Unavailable)?;
+        if runtime
+            .sessions
+            .get(&session)
+            .is_none_or(|expiry| *expiry <= Instant::now())
+        {
+            return Err(crate::keepass::StoreError::Locked);
+        }
+        drop(runtime);
+        admin.store.unlock_at_generation(password, generation)
+    })
+    .await
+    {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
         _ => (StatusCode::FORBIDDEN, "Unable to unlock vault").into_response(),
     }
@@ -661,6 +702,9 @@ async fn logout(State(admin): State<Arc<Admin>>, headers: HeaderMap) -> Response
         && let Ok(mut r) = admin.runtime.lock()
     {
         r.sessions.remove(&session);
+        if admin.store.cancel_unlocks().is_err() {
+            return failed();
+        }
     }
     (
         [(
@@ -854,6 +898,189 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("empty cookie"))?
             .into())
     }
+    #[tokio::test]
+    async fn unauthenticated_rate_limit_cannot_block_owner_lock() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let admin = &fixture.admin;
+        admin
+            .runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+            .sessions
+            .insert(digest("synthetic-session"), Instant::now() + SESSION_TTL);
+        let session = format!("{COOKIE}=synthetic-session");
+        for _ in 0..31 {
+            post(admin, "lock", json!({}), None, Some(&admin.config.origin)).await?;
+        }
+        assert_eq!(
+            post(admin, "lock", json!({}), None, Some(&admin.config.origin))
+                .await?
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        assert_eq!(
+            post(
+                admin,
+                "lock",
+                json!({}),
+                Some(&session),
+                Some(&admin.config.origin)
+            )
+            .await?
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        admin
+            .runtime
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+            .owner_rate_count = u32::MAX;
+        assert_eq!(
+            post(
+                admin,
+                "lock",
+                json!({}),
+                Some(&session),
+                Some(&admin.config.origin)
+            )
+            .await?
+            .status(),
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            post(admin, "lock", json!({}), Some(&session), None)
+                .await?
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stalled_admin_body_times_out() -> Result<()> {
+        let request = http::Request::builder()
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from_stream(futures_util::stream::pending::<
+                std::io::Result<axum::body::Bytes>,
+            >()))?;
+        assert!(super::body::<Value>(request).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lock_and_logout_cancel_unlocks_still_reading_the_body() -> Result<()> {
+        for action in ["lock", "logout"] {
+            let fixture = Fixture::new()?;
+            let admin = &fixture.admin;
+            admin
+                .runtime
+                .lock()
+                .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+                .sessions
+                .insert(digest("synthetic-session"), Instant::now() + SESSION_TTL);
+            let session = format!("{COOKIE}=synthetic-session");
+            let (reading, read) = tokio::sync::oneshot::channel();
+            let (finish, finished) = tokio::sync::oneshot::channel();
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/api/unlock")
+                .header(header::ORIGIN, &admin.config.origin)
+                .header(header::COOKIE, &session)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from_stream(futures_util::stream::once(async move {
+                    let _ = reading.send(());
+                    finished.await.map_err(std::io::Error::other)?;
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from_static(
+                        br#"{"password":"synthetic-master"}"#,
+                    ))
+                })))?;
+            let pending = tokio::spawn(admin.router().oneshot(request));
+            read.await?;
+            assert_eq!(
+                post(
+                    admin,
+                    action,
+                    json!({}),
+                    Some(&session),
+                    Some(&admin.config.origin)
+                )
+                .await?
+                .status(),
+                StatusCode::NO_CONTENT
+            );
+            finish
+                .send(())
+                .map_err(|()| anyhow::anyhow!("upload closed"))?;
+            assert_eq!(pending.await??.status(), StatusCode::FORBIDDEN, "{action}");
+            assert!(admin.store.health().is_err(), "{action}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logout_during_registration_body_cannot_add_a_passkey() -> Result<()> {
+        let fixture = Fixture::new()?;
+        let admin = &fixture.admin;
+        let mut owner = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        enroll(admin, &mut owner, fixture.code.expose_secret(), None).await?;
+        let session = login(admin, &mut owner).await?;
+        let start = value(
+            post(
+                admin,
+                "register/start",
+                json!({"code":""}),
+                Some(&session),
+                Some(&admin.config.origin),
+            )
+            .await?,
+        )
+        .await?;
+        let mut second = WebauthnAuthenticator::new(SoftPasskey::new(true));
+        let credential = second.do_registration(
+            Url::parse(&admin.config.origin)?,
+            serde_json::from_value(start["options"].clone())?,
+        )?;
+        let payload = serde_json::to_vec(&json!({"id":start["id"], "credential":credential}))?;
+        let (reading, read) = tokio::sync::oneshot::channel();
+        let (finish, finished) = tokio::sync::oneshot::channel();
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/api/register/finish")
+            .header(header::ORIGIN, &admin.config.origin)
+            .header(header::COOKIE, &session)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from_stream(futures_util::stream::once(async move {
+                let _ = reading.send(());
+                finished.await.map_err(std::io::Error::other)?;
+                Ok::<_, std::io::Error>(axum::body::Bytes::from(payload))
+            })))?;
+        let pending = tokio::spawn(admin.router().oneshot(request));
+        read.await?;
+        post(
+            admin,
+            "logout",
+            json!({}),
+            Some(&session),
+            Some(&admin.config.origin),
+        )
+        .await?;
+        finish
+            .send(())
+            .map_err(|()| anyhow::anyhow!("upload closed"))?;
+        assert_eq!(pending.await??.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            admin
+                .runtime
+                .lock()
+                .map_err(|_| anyhow::anyhow!("poisoned lock"))?
+                .registrations
+                .keys
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
     async fn passkey_enrollment_login_unlock_recovery_and_restart() -> Result<()> {

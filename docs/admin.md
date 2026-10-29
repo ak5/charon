@@ -42,8 +42,11 @@ Challenges and opaque admin sessions remain in process memory. Admin cookies are
 Secure, HttpOnly and SameSite Strict; sessions expire after ten minutes. Unlock,
 lock and registration require a valid session and the exact configured Origin.
 First enrollment requires the console code instead of a session. There is a
-global limit of 30 origin-accepted non-GET requests per 60-second window;
-repeated attempts can temporarily block the owner. Challenges are bounded to
+separate limit of 30 origin-accepted non-GET requests per 60-second window
+for authenticated and unauthenticated clients. Authenticated vault locking is
+exempt, so exhausted budgets cannot stop an existing owner session from locking.
+Unauthenticated flooding can still delay sign-in; restrict admin network access.
+JSON bodies must arrive within ten seconds. Challenges are bounded to
 32 pending ceremonies, sessions to 32 active tokens, and registrations to eight
 passkeys. Capacity is rechecked when ceremonies finish.
 
@@ -51,8 +54,11 @@ passkeys. Capacity is rechecked when ceremonies finish.
 
 Existing public registrations survive restart; the decrypted snapshot and admin
 sessions do not. Sign in and enter the master password after every restart.
-Explicit lock drops the mapped values and cancels any in-flight unlock commit.
-Signing out revokes that browser session; it does not lock the vault.
+Explicit lock drops the mapped values and cancels any in-flight unlock commit,
+including requests still uploading their body or waiting for a worker. Signing
+out revokes that browser session and cancels pending unlocks without locking an
+already unlocked vault. Recovery-passkey enrollment rechecks session validity
+after reading the request body.
 Lock denies future lookups; requests that already obtained a credential may
 finish within their configured operation bounds. A failed unlock does not replace an already unlocked snapshot. To load an updated KDBX,
 lock and unlock again. Policy mapping changes require a configuration restart.

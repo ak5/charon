@@ -2,7 +2,7 @@ FROM docker.io/library/alpine@sha256:25109184c71bdad752c8312a8623239686a9a2071e8
 
 RUN apk add --no-cache \
     ca-certificates=20261020-r0 \
-    curl=8.22.0-r0 \
+    curl=8.23.0-r0 \
     github-cli=2.83.0-r6
 RUN adduser -D -u 10001 workload
 

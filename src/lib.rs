@@ -4,7 +4,6 @@
 extern crate self as charon;
 
 pub mod admin;
-pub mod approval;
 pub mod broker;
 pub mod ca;
 pub mod config;

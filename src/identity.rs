@@ -18,6 +18,7 @@ use crate::config::{CapabilityPolicy, Config};
 pub const IDENTITY_HEADER: &str = "proxy-authorization";
 const MAX_TOKEN_BYTES: usize = 8 * 1024;
 const MAX_CLAIMS_BYTES: usize = 4 * 1024;
+const MAX_REPLAY_NONCES: usize = 16 * 1024;
 
 /// Claims signed by the workload-identity issuer.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -215,9 +216,13 @@ impl IdentityVerifier {
             .lock()
             .map_err(|_| anyhow::anyhow!("workload replay cache is unavailable"))?;
         used.retain(|_, expiry| expiry.saturating_add(self.clock_skew_seconds) >= now);
-        if used.insert(nonce.to_owned(), expires).is_some() {
+        if used.contains_key(nonce) {
             bail!("workload identity nonce was already used");
         }
+        if used.len() >= MAX_REPLAY_NONCES {
+            bail!("workload replay cache is full");
+        }
+        used.insert(nonce.to_owned(), expires);
         Ok(())
     }
 }
@@ -267,6 +272,34 @@ mod tests {
     use crate::config::{CapabilityPolicy, Config, IdentityConfig, RealmConfig, ServicePolicy};
 
     const NOW: u64 = 1_800_000_000;
+
+    #[test]
+    fn rejected_nonce_reuse_cannot_shorten_replay_protection() -> anyhow::Result<()> {
+        let verifier = IdentityVerifier::new(&config())?;
+        verifier.consume_nonce("same-nonce", NOW + 60, NOW)?;
+        assert!(verifier.consume_nonce("same-nonce", NOW + 1, NOW).is_err());
+        assert!(
+            verifier
+                .consume_nonce("same-nonce", NOW + 60, NOW + 10)
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn full_nonce_cache_denies_without_evicting_unexpired_entries() -> anyhow::Result<()> {
+        let verifier = IdentityVerifier::new(&config())?;
+        *verifier
+            .used_nonces
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned cache"))? = (0..super::MAX_REPLAY_NONCES)
+            .map(|n| (n.to_string(), NOW + 60))
+            .collect();
+        assert!(verifier.consume_nonce("overflow", NOW + 60, NOW).is_err());
+        assert!(verifier.consume_nonce("0", NOW + 60, NOW).is_err());
+        verifier.consume_nonce("fresh", NOW + 120, NOW + 63)?;
+        Ok(())
+    }
 
     fn signing_key() -> SigningKey {
         SigningKey::from_bytes(&[9_u8; 32])

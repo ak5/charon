@@ -51,7 +51,7 @@ pub fn sanitize_headers(
         .iter()
         .map(|name| HeaderName::from_static(name))
         .collect::<HashSet<_>>();
-    if let Some(encoding) = headers.get(http::header::CONTENT_ENCODING) {
+    for encoding in headers.get_all(http::header::CONTENT_ENCODING) {
         let identity = encoding
             .to_str()
             .is_ok_and(|value| value.eq_ignore_ascii_case("identity"));
@@ -81,7 +81,7 @@ pub fn sanitize_headers(
 
 /// Stream text through a rolling redactor with backpressure and bounded state.
 ///
-/// The sanitizer retains at most `longest protected value - 1` uncommitted
+/// The sanitizer retains at most `6 * longest protected value + 12` uncommitted
 /// bytes plus the current upstream chunk. Cancellation drops and zeroizes the
 /// retained overlap. Stream errors expose only a fixed local message.
 pub fn redact_text_stream<S, E>(
@@ -107,10 +107,16 @@ where
                 if state.pending.is_empty() {
                     return None;
                 }
-                let bytes = Bytes::from(std::mem::take(&mut state.pending));
+                let bytes =
+                    Bytes::from(redact_prefix(&mut state.pending, &state.protected, true).await);
                 return Some((Ok(bytes), state));
             }
-            match state.upstream.next().await {
+            match state
+                .upstream
+                .next()
+                .await
+                .map(|chunk| chunk.map_err(|_| ()))
+            {
                 Some(Ok(chunk)) => {
                     state.received = match state.received.checked_add(chunk.len()) {
                         Some(total) if total <= state.byte_limit => total,
@@ -124,21 +130,12 @@ where
                         }
                     };
                     state.pending.extend_from_slice(&chunk);
-                    redact_all(&mut state.pending, &state.protected);
-                    let overlap = state
-                        .protected
-                        .iter()
-                        .map(|value| value.expose_secret().len().saturating_sub(1))
-                        .max()
-                        .unwrap_or(0);
-                    if state.pending.len() > overlap {
-                        let emit = state.pending.len() - overlap;
-                        let tail = state.pending.split_off(emit);
-                        let bytes = Bytes::from(std::mem::replace(&mut state.pending, tail));
-                        return Some((Ok(bytes), state));
+                    let output = redact_prefix(&mut state.pending, &state.protected, false).await;
+                    if !output.is_empty() {
+                        return Some((Ok(Bytes::from(output)), state));
                     }
                 }
-                Some(Err(_)) => {
+                Some(Err(())) => {
                     state.pending.zeroize();
                     state.finished = true;
                     return Some((
@@ -215,6 +212,7 @@ pub fn sanitize_structured_stream<S, E>(
     format: StructuredStreamFormat,
     max_record_bytes: usize,
     forbidden_fields: Vec<String>,
+    protected: Vec<SecretString>,
 ) -> Pin<Box<dyn Stream<Item = std::io::Result<Bytes>> + Send>>
 where
     S: Stream<Item = std::result::Result<Bytes, E>> + Send + 'static,
@@ -228,6 +226,7 @@ where
         format,
         max_record_bytes,
         forbidden_fields,
+        protected,
         record_ready: false,
         finished: false,
     };
@@ -249,9 +248,15 @@ where
                         state,
                     ));
                 }
-                let output = sanitize_record(&record, state.format, &state.forbidden_fields)
-                    .map(Bytes::from)
-                    .map_err(|_| std::io::Error::other("structured response sanitization failed"));
+                let output = sanitize_record(
+                    &record,
+                    state.format,
+                    &state.forbidden_fields,
+                    &state.protected,
+                )
+                .await
+                .map(Bytes::from)
+                .map_err(|_| std::io::Error::other("structured response sanitization failed"));
                 return Some((output, state));
             }
             if state.finished {
@@ -314,10 +319,45 @@ where
 /// # Errors
 ///
 /// Rejects invalid JSON and documents that cannot be re-encoded.
-pub fn sanitize_json_document(input: &[u8], forbidden_fields: &[String]) -> Result<Vec<u8>> {
+pub async fn sanitize_json_document(
+    input: &[u8],
+    forbidden_fields: &[String],
+    protected: &[SecretString],
+) -> Result<Vec<u8>> {
     let mut value: serde_json::Value =
         serde_json::from_slice(input).context("structured response is invalid JSON")?;
-    remove_fields(&mut value, forbidden_fields);
+    let mut pending = vec![&mut value];
+    while let Some(node) = pending.pop() {
+        tokio::task::yield_now().await;
+        match node {
+            serde_json::Value::Object(object) => {
+                object.retain(|name, _| {
+                    !forbidden_fields.contains(name)
+                        && !contains_protected(name.as_bytes(), protected)
+                });
+                pending.extend(object.values_mut());
+            }
+            serde_json::Value::Array(items) => pending.extend(items.iter_mut()),
+            serde_json::Value::String(text) => {
+                let mut raw = zeroize::Zeroizing::new(text.as_bytes().to_vec());
+                let safe = redact_prefix(&mut raw, protected, true).await;
+                text.zeroize();
+                *text = String::from_utf8(safe).context("sanitized JSON string is invalid")?;
+            }
+            primitive => {
+                let encoded = zeroize::Zeroizing::new(primitive.to_string());
+                let numeric_match = primitive.as_number().is_some_and(|number| {
+                    protected.iter().any(|secret| {
+                        serde_json::from_str::<serde_json::Number>(secret.expose_secret())
+                            .is_ok_and(|candidate| candidate.as_f64() == number.as_f64())
+                    })
+                });
+                if numeric_match || contains_protected(encoded.as_bytes(), protected) {
+                    *primitive = serde_json::Value::String("[REDACTED]".into());
+                }
+            }
+        }
+    }
     serde_json::to_vec(&value).context("structured response could not be encoded")
 }
 
@@ -329,6 +369,7 @@ struct StructuredState<S> {
     format: StructuredStreamFormat,
     max_record_bytes: usize,
     forbidden_fields: Vec<String>,
+    protected: Vec<SecretString>,
     record_ready: bool,
     finished: bool,
 }
@@ -401,14 +442,15 @@ fn next_record(
     (finished && !pending.is_empty()).then(|| (pending.to_vec(), pending.len()))
 }
 
-fn sanitize_record(
+async fn sanitize_record(
     record: &[u8],
     format: StructuredStreamFormat,
     forbidden_fields: &[String],
+    protected: &[SecretString],
 ) -> Result<Vec<u8>> {
     match format {
         StructuredStreamFormat::Ndjson => {
-            let mut output = sanitize_json_document(record, forbidden_fields)?;
+            let mut output = sanitize_json_document(record, forbidden_fields, protected).await?;
             output.push(b'\n');
             Ok(output)
         }
@@ -424,6 +466,9 @@ fn sanitize_record(
                     || line.starts_with("id:")
                     || line.starts_with("retry:")
                 {
+                    if contains_protected(line.as_bytes(), protected) {
+                        bail!("SSE metadata contains protected material");
+                    }
                     output.extend_from_slice(line.as_bytes());
                     output.push(b'\n');
                 } else {
@@ -433,9 +478,14 @@ fn sanitize_record(
             if !data_lines.is_empty() {
                 let data = data_lines.join("\n");
                 if data == "[DONE]" {
+                    if contains_protected(data.as_bytes(), protected) {
+                        bail!("SSE marker contains protected material");
+                    }
                     output.extend_from_slice(b"data: [DONE]\n");
                 } else {
-                    let sanitized = sanitize_json_document(data.as_bytes(), forbidden_fields)?;
+                    let sanitized =
+                        sanitize_json_document(data.as_bytes(), forbidden_fields, protected)
+                            .await?;
                     output.extend_from_slice(b"data: ");
                     output.extend_from_slice(&sanitized);
                     output.push(b'\n');
@@ -444,23 +494,6 @@ fn sanitize_record(
             output.push(b'\n');
             Ok(output)
         }
-    }
-}
-
-fn remove_fields(value: &mut serde_json::Value, forbidden_fields: &[String]) {
-    match value {
-        serde_json::Value::Object(object) => {
-            object.retain(|name, _| !forbidden_fields.iter().any(|field| field == name));
-            for child in object.values_mut() {
-                remove_fields(child, forbidden_fields);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                remove_fields(item, forbidden_fields);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -479,16 +512,125 @@ impl<S> Drop for RedactionState<S> {
     }
 }
 
-fn redact_all(buffer: &mut Vec<u8>, protected: &[SecretString]) {
-    for value in protected {
-        let needle = value.expose_secret().as_bytes();
-        if needle.is_empty() {
-            continue;
+async fn redact_prefix(
+    buffer: &mut Vec<u8>,
+    protected: &[SecretString],
+    finished: bool,
+) -> Vec<u8> {
+    let mut output = Vec::new();
+    let mut offset = 0;
+    let work_per_offset = protected
+        .iter()
+        .map(|secret| secret.expose_secret().len())
+        .sum::<usize>()
+        .max(1);
+    let mut work = 0_usize;
+    while offset < buffer.len() {
+        // Long, repeatedly almost-matching input must not monopolize the executor.
+        work = work.saturating_add(work_per_offset);
+        if work >= 256 * 1024 {
+            tokio::task::yield_now().await;
+            work = 0;
         }
-        while let Some(index) = find_bytes(buffer, needle) {
-            buffer.splice(index..index + needle.len(), REDACTION.iter().copied());
+        let input = &buffer[offset..];
+        let mut partial = false;
+        let matched = protected
+            .iter()
+            .filter_map(|value| {
+                let secret = value.expose_secret();
+                if secret.is_empty() {
+                    return None;
+                }
+                partial |= input.len() < secret.len() && secret.as_bytes().starts_with(input);
+                let raw = input.starts_with(secret.as_bytes()).then_some(secret.len());
+                let decoded = match json_secret_length(input, secret) {
+                    Ok(length) => Some(length),
+                    Err(incomplete) => {
+                        partial |= incomplete;
+                        None
+                    }
+                };
+                raw.into_iter().chain(decoded).max()
+            })
+            .max();
+        if partial && !finished {
+            break;
+        }
+        if let Some(length) = matched {
+            output.extend_from_slice(REDACTION);
+            offset += length;
+        } else {
+            output.push(buffer[offset]);
+            offset += 1;
         }
     }
+    buffer[..offset].zeroize();
+    buffer.drain(..offset);
+    output
+}
+
+// Decode JSON characters during matching, including mixed escapes and surrogate pairs.
+// This also covers JSON embedded in SSE/text without buffering an entire document.
+fn json_secret_length(input: &[u8], secret: &str) -> Result<usize, bool> {
+    if !input[..input.len().min(secret.len())].contains(&b'\\') {
+        return if input.starts_with(secret.as_bytes()) {
+            Ok(secret.len())
+        } else {
+            Err(secret.as_bytes().starts_with(input))
+        };
+    }
+    let mut offset = 0;
+    for expected in secret.chars() {
+        let remaining = input.get(offset..).ok_or(true)?;
+        if remaining.first() == Some(&b'\\') {
+            let (character, length) = json_escape(remaining).ok_or(remaining.len() < 12)?;
+            if character != expected {
+                return Err(false);
+            }
+            offset += length;
+        } else {
+            let mut encoded = [0; 4];
+            let bytes = expected.encode_utf8(&mut encoded).as_bytes();
+            if !remaining.starts_with(bytes) {
+                return Err(bytes.starts_with(remaining));
+            }
+            offset += bytes.len();
+        }
+    }
+    Ok(offset)
+}
+
+fn json_escape(input: &[u8]) -> Option<(char, usize)> {
+    let character = match *input.get(1)? {
+        b'"' => '"',
+        b'\\' => '\\',
+        b'/' => '/',
+        b'b' => '\u{8}',
+        b'f' => '\u{c}',
+        b'n' => '\n',
+        b'r' => '\r',
+        b't' => '\t',
+        b'u' => {
+            let hex = |bytes: &[u8]| u32::from_str_radix(std::str::from_utf8(bytes).ok()?, 16).ok();
+            let first = hex(input.get(2..6)?)?;
+            if (0xd800..=0xdbff).contains(&first) {
+                if input.get(6..8)? != b"\\u" {
+                    return None;
+                }
+                let second = hex(input.get(8..12)?)?;
+                if !(0xdc00..=0xdfff).contains(&second) {
+                    return None;
+                }
+                return Some((
+                    char::from_u32(0x10000 + ((first - 0xd800) << 10) + second - 0xdc00)?,
+                    12,
+                ));
+            }
+            return Some((char::from_u32(first)?, 6));
+        }
+        _ => return None,
+    };
+    Some((character, 2))
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -497,10 +639,14 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|candidate| candidate == needle)
 }
 
-fn contains_protected(value: &[u8], protected: &[SecretString]) -> bool {
+pub(crate) fn contains_protected(value: &[u8], protected: &[SecretString]) -> bool {
     protected.iter().any(|secret| {
         let needle = secret.expose_secret().as_bytes();
-        !needle.is_empty() && find_bytes(value, needle).is_some()
+        !needle.is_empty()
+            && (find_bytes(value, needle).is_some()
+                || (0..value.len()).any(|offset| {
+                    json_secret_length(&value[offset..], secret.expose_secret()).is_ok()
+                }))
     })
 }
 
@@ -546,6 +692,109 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn redacts_json_escapes_and_replacement_text_at_every_chunk_boundary() {
+        for (secret, input, expected) in [
+            ("REDACTED", "REDACTED REDACTED", "[REDACTED] [REDACTED]"),
+            (
+                "a\"bcdefgh",
+                r#"{"echo":"a\"bcdefgh"}"#,
+                r#"{"echo":"[REDACTED]"}"#,
+            ),
+            (
+                "a\"bcdefgh",
+                r#"{"a\u0022b\u0063defgh":true}"#,
+                r#"{"[REDACTED]":true}"#,
+            ),
+            (
+                "ab😀cd/é",
+                r#"data: {"echo":"\u0061b\uD83D\ude00cd\/\u00e9"}
+
+"#,
+                "data: {\"echo\":\"[REDACTED]\"}\n\n",
+            ),
+            (
+                "ab\\cd\nef",
+                r#"{"echo":"ab\\cd\nef"}"#,
+                r#"{"echo":"[REDACTED]"}"#,
+            ),
+        ] {
+            for split in 0..=input.len() {
+                let chunks = [
+                    Bytes::copy_from_slice(&input.as_bytes()[..split]),
+                    Bytes::copy_from_slice(&input.as_bytes()[split..]),
+                ];
+                let output = redact_text_stream(
+                    stream::iter(chunks.map(Ok::<_, std::io::Error>)),
+                    vec![SecretString::from(secret)],
+                    4096,
+                )
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<std::io::Result<Vec<_>>>()
+                .unwrap_or_else(|error| panic!("{error}"))
+                .concat();
+                assert_eq!(output, expected.as_bytes(), "split {split}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn redaction_does_not_rescan_replacements_or_commit_partial_matches() {
+        let input = format!(
+            "{}fixture-secret-tail{}fixture-secret",
+            "x".repeat(100),
+            "y".repeat(100)
+        );
+        let chunks = input
+            .as_bytes()
+            .chunks(1)
+            .map(|chunk| Ok::<_, std::io::Error>(Bytes::copy_from_slice(chunk)))
+            .collect::<Vec<_>>();
+        let output = redact_text_stream(
+            stream::iter(chunks),
+            vec![
+                SecretString::from("fixture-secret"),
+                SecretString::from("fixture-secret-tail"),
+                SecretString::from("REDACTED"),
+            ],
+            4096,
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .concat();
+        assert_eq!(
+            output,
+            format!("{}[REDACTED]{}[REDACTED]", "x".repeat(100), "y".repeat(100)).as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn adversarial_escaped_prefixes_remain_cancellable() {
+        let body = Bytes::from("\\u0061".repeat(64 * 1024));
+        let secret = SecretString::from(format!("{}b", "a".repeat(16 * 1024)));
+        let redacted = redact_text_stream(
+            stream::once(async { Ok::<_, std::io::Error>(body) }),
+            vec![secret],
+            1024 * 1024,
+        );
+        let started = std::time::Instant::now();
+        let result = super::guard_stream(
+            redacted,
+            usize::MAX,
+            std::time::Duration::from_millis(20),
+            std::time::Duration::from_millis(20),
+        )
+        .collect::<Vec<_>>()
+        .await;
+        assert!(result.last().is_some_and(Result::is_err));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[tokio::test]
     async fn stream_guard_bounds_bytes_and_idle_time() {
         let guarded = super::guard_stream(
             stream::iter([Ok::<_, std::io::Error>("123".into()), Ok("456".into())]),
@@ -559,15 +808,63 @@ mod tests {
         assert!(guarded[1].is_err());
     }
 
-    #[test]
-    fn buffered_json_removes_forbidden_fields_recursively() {
+    #[tokio::test]
+    async fn buffered_json_removes_forbidden_fields_recursively() {
         let output = super::sanitize_json_document(
             br#"{"ok":true,"token":"fixture-secret","nested":{"signed_url":"bad","value":1}}"#,
             &["token".into(), "signed_url".into()],
+            &[],
         )
+        .await
         .unwrap_or_else(|error| panic!("{error}"));
         let text = String::from_utf8(output).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(text, r#"{"nested":{"value":1},"ok":true}"#);
+    }
+
+    #[tokio::test]
+    async fn structured_redaction_preserves_json_types_and_framing() {
+        let protected = vec![
+            SecretString::from("12345678"),
+            SecretString::from("a\"bcdefgh"),
+        ];
+        let input =
+            br#"{"number":12345678,"text":"a\"bcdefgh","12345678":"hidden-key","ok":[true,1]}"#;
+        let output = super::sanitize_json_document(input, &[], &protected)
+            .await
+            .unwrap_or_else(|error| panic!("{error}"));
+        let value: serde_json::Value =
+            serde_json::from_slice(&output).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            value,
+            serde_json::json!({"number":"[REDACTED]","text":"[REDACTED]","ok":[true,1]})
+        );
+        let exponent =
+            super::sanitize_json_document(b"12345678", &[], &[SecretString::from("1.2345678e7")])
+                .await
+                .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(exponent, br#""[REDACTED]""#);
+        let sse = Bytes::from(format!("data: {}\n\n", String::from_utf8_lossy(input)));
+        let result = super::sanitize_structured_stream(
+            stream::once(async { Ok::<_, std::io::Error>(sse) }),
+            crate::broker::StructuredStreamFormat::Sse,
+            1024,
+            vec![],
+            protected,
+        )
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<std::io::Result<Vec<_>>>()
+        .unwrap_or_else(|error| panic!("{error}"))
+        .concat();
+        let data = std::str::from_utf8(&result).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                data.trim().strip_prefix("data: ").unwrap_or_default()
+            )
+            .unwrap_or_else(|error| panic!("{error}")),
+            value
+        );
     }
 
     #[tokio::test]
@@ -581,6 +878,7 @@ mod tests {
             crate::broker::StructuredStreamFormat::Sse,
             1024,
             vec!["token".into()],
+            Vec::new(),
         );
         let output = structured
             .collect::<Vec<_>>()
@@ -602,6 +900,7 @@ mod tests {
             crate::broker::StructuredStreamFormat::Ndjson,
             8,
             Vec::new(),
+            Vec::new(),
         )
         .collect::<Vec<_>>()
         .await
@@ -619,6 +918,7 @@ mod tests {
             crate::broker::StructuredStreamFormat::Ndjson,
             8,
             Vec::new(),
+            Vec::new(),
         )
         .collect::<Vec<_>>()
         .await;
@@ -632,6 +932,7 @@ mod tests {
             sse,
             crate::broker::StructuredStreamFormat::Sse,
             13,
+            Vec::new(),
             Vec::new(),
         )
         .collect::<Vec<_>>()
@@ -650,6 +951,7 @@ mod tests {
             stream::iter([Ok::<_, std::io::Error>(oversized)]),
             crate::broker::StructuredStreamFormat::Ndjson,
             super::STRUCTURED_SCAN_WINDOW_BYTES * 2,
+            Vec::new(),
             Vec::new(),
         )
         .collect::<Vec<_>>()
@@ -671,6 +973,7 @@ mod tests {
             crate::broker::StructuredStreamFormat::Sse,
             32,
             Vec::new(),
+            Vec::new(),
         )
         .collect::<Vec<_>>()
         .await
@@ -680,6 +983,28 @@ mod tests {
         .concat();
 
         assert_eq!(output, b"data: {\"n\":1}\n\ndata: {\"n\":2}\n\n");
+    }
+
+    #[test]
+    fn denies_json_escaped_headers_and_every_compression_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-echo",
+            HeaderValue::from_static(r#"{"value":"a\u0022bcdefgh"}"#),
+        );
+        assert!(
+            sanitize_headers(
+                &headers,
+                &[SecretString::from("a\"bcdefgh")],
+                CompressionPolicy::IdentityOnly,
+                false
+            )
+            .is_err()
+        );
+        headers.clear();
+        headers.append("content-encoding", HeaderValue::from_static("identity"));
+        headers.append("content-encoding", HeaderValue::from_static("gzip"));
+        assert!(sanitize_headers(&headers, &[], CompressionPolicy::IdentityOnly, false).is_err());
     }
 
     #[test]

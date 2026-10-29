@@ -241,3 +241,12 @@ CONNECT tunnels. It binds one fixed isolated workload, supports secretless
 forwarding and typed credential sinks, and requires its own validated schema.
 Signed proxy authentication, transparent service lanes, and Hermes tool
 admission remain independent controls. Infra owns isolation, trust and cutover.
+
+### Explicit egress proxy
+
+Signed and transparent forwarding ignore `HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY` and platform proxy discovery. Configure `upstream_proxy` explicitly
+when required. That proxy resolves destination names, so Infra must enforce
+DNS/address restrictions there. Without it, Charon's pinned resolver enforces
+the direct destination address policy. The exclusive gateway and Telegram
+client also ignore ambient proxy settings.

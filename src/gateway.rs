@@ -860,10 +860,7 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
             continue;
         }
         ensure!(
-            !protected.iter().any(|s| value
-                .as_bytes()
-                .windows(s.expose_secret().len())
-                .any(|w| w == s.expose_secret().as_bytes())),
+            !crate::response::contains_protected(value.as_bytes(), &protected),
             "protected response header denied"
         );
         downstream = downstream.header(name, value);
@@ -878,6 +875,12 @@ async fn forward(state: &Gateway, request: Request) -> Result<Response> {
         Duration::from_secs(route.idle_timeout_seconds),
     );
     let sanitized = redact_text_stream(guarded, protected, route.max_response_bytes);
+    let sanitized = guard_stream(
+        sanitized,
+        route.max_response_bytes,
+        Duration::from_secs(route.max_duration_seconds).saturating_sub(started.elapsed()),
+        Duration::from_secs(route.idle_timeout_seconds),
+    );
     // Path is a policy identifier, never an untrusted URL or token-bearing path.
     let receipt = DataPlaneReceipt {
         realm: state.config.realm.id.clone(),

@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import socket
 import stat
+import time
 from typing import Any
 
 from .canonical import canonical_json
@@ -40,30 +41,51 @@ def request(path: Path, payload: dict[str, Any], timeout_ms: int) -> dict[str, A
     encoded = canonical_json(payload) + b"\n"
     if len(encoded) > MAX_MESSAGE:
         raise ProtocolError("local request is too large")
+    deadline = time.monotonic() + timeout_ms / 1000
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client.settimeout(timeout_ms / 1000)
     try:
+        client.settimeout(max(0.001, deadline - time.monotonic()))
         client.connect(str(path))
+        client.settimeout(max(0.001, deadline - time.monotonic()))
         client.sendall(encoded)
-        chunks = bytearray()
-        while b"\n" not in chunks:
-            chunk = client.recv(4096)
-            if not chunk:
-                raise ProtocolError("local response ended early")
-            chunks.extend(chunk)
-            if len(chunks) > MAX_MESSAGE:
-                raise ProtocolError("local response is too large")
+        return receive_message(client, deadline)
     except (OSError, TimeoutError) as error:
         raise ProtocolError("admission service unavailable") from error
     finally:
         client.close()
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
+
+
+def receive_message(connection: socket.socket, deadline: float) -> dict[str, Any]:
+    """Read one bounded message within an absolute monotonic deadline."""
+
+    chunks = bytearray()
+    while b"\n" not in chunks:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProtocolError("local message timed out")
+        connection.settimeout(remaining)
+        chunk = connection.recv(min(4096, MAX_MESSAGE + 1 - len(chunks)))
+        if not chunk:
+            raise ProtocolError("local message ended early")
+        chunks.extend(chunk)
+        if len(chunks) > MAX_MESSAGE:
+            raise ProtocolError("local message is too large")
     line, _, trailing = bytes(chunks).partition(b"\n")
     if trailing:
-        raise ProtocolError("local response contains trailing data")
+        raise ProtocolError("local message contains trailing data")
     try:
-        value = json.loads(line)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ProtocolError("local response is invalid") from error
+        value = json.loads(line, object_pairs_hook=_unique_object)
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:
+        raise ProtocolError("local message is invalid") from error
     if not isinstance(value, dict):
-        raise ProtocolError("local response is invalid")
+        raise ProtocolError("local message is invalid")
     return value
