@@ -197,6 +197,17 @@ capability without placing the underlying credential in that workload.
     with reads bounded to 120 lines and waits to 30 seconds. Charon does not
     enforce remote argument limits or trust model arguments/MCP annotations.
     Observation may reveal sensitive terminal output; Infra owns access to it.
+    The optional Botyard catalog adds seven exact names with explicit policy
+    opt-in: targets/status/snapshot are reads; open/navigate/back/close are
+    mutations. Classification is not human approval. Botyard owns selected-profile
+    grants, per-target operations, context ownership, destination enforcement,
+    TTL/revocation, and consequential-action approval. Authenticated snapshots
+    can disclose sensitive page data; navigation can cause website side effects.
+    Charon does not validate remote tool arguments or enforce browser-context
+    isolation. Infra must bind these names to the pinned reviewed Botyard contract
+    through a fixed HTTPS connector whose caller-owned transport credential is
+    hidden from Hermes. No wildcard profile grant or additional credential flow
+    is introduced by catalog registration.
     Browserless deployment policy omits
     browser tools; newly introduced, unclassified, or policy-omitted names fail
     closed. Charon semantic admission does not replace Hermes command approval,

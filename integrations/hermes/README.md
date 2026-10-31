@@ -61,7 +61,7 @@ to deny a deployment-eligible tool.
 ### Optional Herdr observation catalog
 
 Version 0.2.2 adds a separate reviewed catalog in
-[`external_tools.py`](src/charon_hermes/external_tools.py). Its only names are
+[`external_tools.py`](src/charon_hermes/external_tools.py). The Herdr names are
 `mcp__herdr_mac__`, `mcp__herdr_mule__`, and `mcp__herdr_dev__`, each followed by
 exactly `ping`, `agent_list`, `agent_get`, `agent_read`, or `agent_wait`: 15
 explicit entries, all `read`. This notation describes the catalog; policy and
@@ -89,7 +89,7 @@ chmod 0444 hermes-policy.json
 charon-hermes-policy validate hermes-policy.json
 ```
 
-Omitted entries remain denied. Mutating methods, session operations, additional
+Omitted entries remain denied. Herdr mutating methods, session operations, additional
 hosts, lookalike names and unreviewed MCP tools cannot be added to policy. Both
 the plugin and admission policy loader use the same reviewed classifier.
 
@@ -98,8 +98,56 @@ hosts, forced-command keys, only these five remote methods, reads limited to
 120 lines and waits to 30 seconds. Charon does not inspect raw arguments or
 enforce those remote limits. `read` means no mutation; observed terminal output
 can contain sensitive data and must be authorized for the observing workload.
-Install the 0.2.2 wheel and companion from the same immutable image before
+Install the matching wheel and companion from the same immutable image before
 delivering an opt-in policy. This does not change the Charon network gateway.
+
+### Optional Botyard browser catalog
+
+Version 0.2.3 adds `BOTYARD_BROWSER` in
+[`external_tools.py`](src/charon_hermes/external_tools.py), reviewed against
+Botyard contract commit
+[`b01024745e350cb842a67906784ea84e20234916`](https://github.com/ak5/botyard/blob/b01024745e350cb842a67906784ea84e20234916/docs/browser-mcp.md)
+and its [generated tool schemas](https://github.com/ak5/botyard/blob/b01024745e350cb842a67906784ea84e20234916/docs/browser-mcp-tools.json).
+The Hermes MCP server namespace must be `botyard`.
+
+| Exact tool name | Classification |
+| --- | --- |
+| `mcp__botyard__botyard_browser_targets` | `read` |
+| `mcp__botyard__botyard_browser_open` | `mutation` |
+| `mcp__botyard__botyard_browser_status` | `read` |
+| `mcp__botyard__botyard_browser_navigate` | `mutation` |
+| `mcp__botyard__botyard_browser_snapshot` | `read` |
+| `mcp__botyard__botyard_browser_back` | `mutation` |
+| `mcp__botyard__botyard_browser_close` | `mutation` |
+
+Opt in by adding only the selected exact names and matching classifications to
+`allowed_tools`. The default policy, runtime profile, core catalog and Herdr
+catalog are unchanged. Install the paired 0.2.3 wheel and companion from the
+same immutable image before enabling these entries. Unknown names, wildcards,
+general JavaScript, file, cookie and unreviewed browser tools remain denied.
+
+Classification is not approval: an explicitly allowed mutation passes semantic
+admission without a human prompt. Botyard must enforce owner-selected profile
+IDs, per-target operations, document origins, context ownership, TTL/revocation,
+and consequential-action policy at execution time. There is no all-profile
+grant. `read` does not mean public data: snapshots may expose authenticated page
+content, and target metadata may identify accounts. Navigation and history can
+cause website/account side effects even without click or form tools.
+
+The reviewed snapshot accepts only `browserRef`; status does not renew a lease,
+and navigation/back return no page content. Charon classifies whole tools; it
+does not validate these remote argument schemas or enforce browser limits.
+The catalog therefore requires the reviewed Botyard implementation, not a
+same-named arbitrary MCP server or server-supplied annotations.
+
+Browser execution stays on Botyard. The integration uses the fixed HTTPS
+`POST /mcp/browser` endpoint, MCP `2025-06-18`, and JSON responses. Infra owns a
+separate connector with an Infisical-managed caller-owned Bearer credential
+hidden from Hermes, routed through Charon's exact HTTPS destination/path policy.
+This is forwarding-only transport authentication; it does not bypass KDBX
+credential mediation. No WSS, local Playwright, gateway change, live profile
+grant or activation is included in this catalog release. Remote execution and
+authorized disposable/persistent lifecycle checks remain deployment prerequisites.
 
 ## Container deployment contract
 
@@ -128,10 +176,10 @@ ARG CHARON_HERMES_IMAGE
 FROM ${CHARON_HERMES_IMAGE} AS charon_hermes_artifact
 FROM <pinned-hermes-v2026.8.3-image>
 COPY --from=charon_hermes_artifact \
-  /opt/charon-hermes/wheels/charon_hermes-0.2.2-py3-none-any.whl /tmp/
+  /opt/charon-hermes/wheels/charon_hermes-0.2.3-py3-none-any.whl /tmp/
 RUN python -m pip install --no-deps \
-  /tmp/charon_hermes-0.2.2-py3-none-any.whl \
-  && rm /tmp/charon_hermes-0.2.2-py3-none-any.whl
+  /tmp/charon_hermes-0.2.3-py3-none-any.whl \
+  && rm /tmp/charon_hermes-0.2.3-py3-none-any.whl
 ```
 
 Set `CHARON_HERMES_IMAGE` to the immutable Charon-Hermes tag and registry

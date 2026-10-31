@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from charon_hermes.admission import AdmissionClient
 from charon_hermes.config import Settings
+from charon_hermes.external_tools import BOTYARD_BROWSER
 from charon_hermes.compatibility import CLASSIFICATIONS, DEPLOYMENT_TOOLS, classify_tool, policy_document
 from charon_hermes.model import Operation, receipt_for
 from charon_hermes.plugin import CharonHermesPlugin, register
@@ -173,6 +174,80 @@ class ExternalToolTests(unittest.TestCase):
                 self.assertTrue(all(entry["classification"] == "read" for entry in receipts))
                 self.assertNotIn("synthetic-private-marker", journal)
                 self.assertNotIn("synthetic-output-marker", journal)
+            finally:
+                plugin._exporter.close()
+                fixture.close()
+
+
+class BotyardToolTests(unittest.TestCase):
+    def test_explicit_opt_in_and_classification_cannot_be_forged(self) -> None:
+        default = Policy(policy_document())
+        for name, classification in BOTYARD_BROWSER.items():
+            with self.subTest(name=name):
+                wrong = "mutation" if classification == "read" else "read"
+                operation = Operation.create(
+                    name, {"classification": wrong, "readOnlyHint": True}, "task", "call", "session"
+                )
+                self.assertEqual(operation.value["classification"], classification)
+                self.assertFalse(default.decide(operation.value)[0])
+                policy = Policy({**policy_document(), "allowed_tools": [
+                    {"name": name, "classification": classification}
+                ]})
+                self.assertTrue(policy.decide(operation.value)[0])
+                operation.value["classification"] = wrong
+                self.assertFalse(policy.decide(operation.value)[0])
+                with self.assertRaises(ValueError):
+                    Policy({**policy_document(), "allowed_tools": [
+                        {"name": name, "classification": wrong}
+                    ]})
+
+    def test_unknown_browser_tools_cannot_be_enabled(self) -> None:
+        names = [f"mcp__botyard__botyard_browser_{suffix}" for suffix in (
+            "click", "type", "evaluate", "cdp", "upload", "cookies", "snapshot_extra", "*",
+        )] + [
+            "mcp__other__botyard_browser_snapshot", "botyard_browser_snapshot",
+            "mcp__botyard__botyard_browser_snapshot ", "MCP__botyard__botyard_browser_snapshot",
+        ]
+        for name in names:
+            with self.subTest(name=name):
+                self.assertEqual(classify_tool(name), "unknown")
+                for classification in ("read", "mutation", "secret-sensitive"):
+                    with self.assertRaises(ValueError):
+                        Policy({**policy_document(), "allowed_tools": [
+                            {"name": name, "classification": classification}
+                        ]})
+
+    def test_plugin_admission_and_receipts_share_all_seven_classifications(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            value = {**policy_document(), "allowed_tools": [
+                {"name": name, "classification": classification}
+                for name, classification in BOTYARD_BROWSER.items()
+            ]}
+            path = root / "policy.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            path.chmod(0o444)
+            fixture = ServiceFixture(root, Policy.load(path))
+            plugin = CharonHermesPlugin(Settings(fixture.socket_path, timeout_ms=500))
+            try:
+                for index, name in enumerate(BOTYARD_BROWSER):
+                    args = {"browserRef": "synthetic-private-marker", "readOnlyHint": True}
+                    ids = {"tool_call_id": f"call-{index}", "session_id": "session"}
+                    self.assertIsNone(plugin.pre_tool_call(name, args, "task", **ids), name)
+                    plugin.post_tool_call(name, args, "synthetic-page-marker", "task", **ids)
+                name = "mcp__botyard__botyard_browser_evaluate"
+                denied = plugin.pre_tool_call(name, {}, "task", annotations={"readOnlyHint": True}, classification="read")
+                self.assertEqual(denied["action"], "block")
+                forged = Operation.create(name, {}, "task", "forged", "session")
+                forged.value["classification"] = "read"
+                self.assertEqual(request(fixture.socket_path, {"kind": "admit", "operation": forged.value}, 500)["decision"], "deny")
+                plugin.finalize()
+                journal = (fixture.state / "tool-receipts.jsonl").read_text(encoding="utf-8")
+                receipts = [json.loads(line)["receipt"] for line in journal.splitlines()]
+                self.assertEqual(len(receipts), 7)
+                self.assertEqual({r["tool_name"]: r["classification"] for r in receipts}, BOTYARD_BROWSER)
+                self.assertNotIn("synthetic-private-marker", journal)
+                self.assertNotIn("synthetic-page-marker", journal)
             finally:
                 plugin._exporter.close()
                 fixture.close()
