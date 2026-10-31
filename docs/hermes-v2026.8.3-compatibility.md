@@ -76,3 +76,12 @@ test against that exact checkout, review every added/removed/changed name and
 classification, update the reviewed digest and policy, then rerun the real
 `PluginContext` test. A new upstream tool makes the inventory equality test fail
 and remains `unknown` and denied until that review is complete.
+
+The optional [Botyard browser catalog](../integrations/hermes/README.md#optional-botyard-browser-catalog)
+adds seven exact external names in integration 0.2.3, reviewed against Botyard
+contract `b01024745e350cb842a67906784ea84e20234916`. Targets/status/snapshot are
+reads; open/navigate/back/close are mutations. Each requires explicit policy
+opt-in and matching plugin/companion versions. The core digest, schema, runtime
+profile, default policy and Herdr classifications are unchanged. Classification
+does not provide execution-side approval or profile grants; Botyard owns those
+checks and browser execution. No gateway transport change is required.

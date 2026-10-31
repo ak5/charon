@@ -136,6 +136,23 @@ fn assert_file_is_neutral(path: &Path) -> Result<()> {
     let Ok(contents) = fs::read_to_string(path) else {
         return Ok(());
     };
+    assert_text_is_neutral(path, &contents)
+}
+
+fn assert_text_is_neutral(path: &Path, contents: &str) -> Result<()> {
+    // Reviewed integration references do not authorize gateway/control-plane coupling.
+    let browser_catalog_reference = matches!(
+        path.to_str(),
+        Some(
+            "integrations/hermes/src/charon_hermes/external_tools.py"
+                | "integrations/hermes/src/charon_hermes/compatibility.py"
+                | "integrations/hermes/tests/test_compatibility.py"
+                | "integrations/hermes/tests/test_integration.py"
+                | "integrations/hermes/README.md"
+                | "docs/hermes-v2026.8.3-compatibility.md"
+                | "docs/threat-model.md"
+        )
+    );
     let lowercase = contents.to_ascii_lowercase();
     for forbidden in [
         ["bot", "yard"].concat(),
@@ -143,7 +160,9 @@ fn assert_file_is_neutral(path: &Path) -> Result<()> {
         ["send", "grift"].concat(),
         ["ghcr.io/", "ak5", "/charon"].concat(),
     ] {
-        if lowercase.contains(&forbidden) {
+        if lowercase.contains(&forbidden)
+            && !(browser_catalog_reference && forbidden == ["bot", "yard"].concat())
+        {
             bail!(
                 "{} contains an operator-specific public value",
                 path.display()
@@ -151,4 +170,18 @@ fn assert_file_is_neutral(path: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[test]
+fn reviewed_catalog_exception_does_not_allow_operator_coupling() {
+    let integration = Path::new("integrations/hermes/src/charon_hermes/external_tools.py");
+    let reviewed_name = ["bot", "yard"].concat();
+    assert!(assert_text_is_neutral(integration, &reviewed_name).is_ok());
+    for path in [
+        "src/gateway.rs",
+        "integrations/hermes/src/charon_hermes/service.py",
+    ] {
+        assert!(assert_text_is_neutral(Path::new(path), &reviewed_name).is_err());
+    }
+    assert!(assert_text_is_neutral(integration, &["tailnet", ".ak5", ".cc"].concat()).is_err());
 }

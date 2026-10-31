@@ -16,7 +16,7 @@ from charon_hermes.compatibility import (
     HERMES_VERSION, policy_document,
 )
 from charon_hermes.plugin import register
-from charon_hermes.external_tools import HERDR_OBSERVATION
+from charon_hermes.external_tools import BOTYARD_BROWSER, HERDR_OBSERVATION
 
 REVIEWED_CLASSIFICATION_DIGEST = "9af1c6e03f149e554ab7cc2fec992ce1a10199873cc5a3ea4f32dae5389c0dc9"
 REVIEWED_EXTERNAL_DIGEST = "b9c8b2a84d71b6fcf3a8c7a9e93f0ea3a3a0040553ef00fda09f75e17a6b2ffa"
@@ -48,6 +48,20 @@ class CompatibilityTests(unittest.TestCase):
         self.assertFalse(set(HERDR_OBSERVATION) & set(DEPLOYMENT_TOOLS))
         encoded = json.dumps(HERDR_OBSERVATION, sort_keys=True, separators=(",", ":")).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), REVIEWED_EXTERNAL_DIGEST)
+
+    def test_botyard_catalog_is_exact_and_separate(self) -> None:
+        expected = {
+            f"mcp__botyard__botyard_browser_{name}": classification
+            for name, classification in (
+                ("targets", "read"), ("open", "mutation"), ("status", "read"),
+                ("navigate", "mutation"), ("snapshot", "read"),
+                ("back", "mutation"), ("close", "mutation"),
+            )
+        }
+        self.assertEqual(BOTYARD_BROWSER, expected)
+        self.assertFalse(set(BOTYARD_BROWSER) & set(CLASSIFICATIONS))
+        self.assertFalse(set(BOTYARD_BROWSER) & set(DEPLOYMENT_TOOLS))
+        self.assertFalse(set(BOTYARD_BROWSER) & set(HERDR_OBSERVATION))
 
     def test_classification_changes_require_review(self) -> None:
         encoded = json.dumps(CLASSIFICATIONS, sort_keys=True, separators=(",", ":")).encode()
