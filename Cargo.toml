@@ -37,7 +37,7 @@ url = "2.5"
 zeroize = "1.8"
 keepass = { version = "0.17.0", default-features = false }
 webauthn-rs = "0.5.5"
-axum-server = { version = "0.8", default-features = false, features = ["tls-rustls-no-provider"] }
+axum-server = { version = "0.9", default-features = false, features = ["tls-rustls-no-provider"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
 
 [dev-dependencies]
